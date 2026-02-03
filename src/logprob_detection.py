@@ -76,6 +76,7 @@ def main():
     data = pd.read_csv(model_output_file)
     model_output_file_test = f"../output/mistral-7b-instruct-answers-{args.dataset}_test.csv"
     load_test = False
+    data_test = None
     if os.path.isfile(model_output_file_test):
         data_test = pd.read_csv(model_output_file_test)
         load_test = True

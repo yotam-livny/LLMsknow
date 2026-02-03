@@ -1,0 +1,35 @@
+{
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "**/wandb"
+  ],
+  "pythonVersion": "3.9",
+  "pythonPlatform": "Darwin",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownVariableType": false,
+  "reportAttributeAccessIssue": false,
+  "reportOptionalMemberAccess": false,
+  "reportOptionalSubscript": false,
+  "reportArgumentType": false,
+  "reportCallIssue": false,
+  "reportPossiblyUnboundVariable": false,
+  "reportGeneralTypeIssues": false,
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.9",
+      "extraPaths": [
+        "src",
+        "/Users/yotamlivny/Library/Python/3.9/lib/python/site-packages"
+      ]
+    }
+  ]
+}
