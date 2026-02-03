@@ -14,11 +14,15 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
+    console.log('App mounted, checking backend...');
     const checkBackend = async () => {
       try {
+        console.log('Calling health endpoint...');
         await api.health();
+        console.log('Backend is online');
         setBackendStatus('online');
-      } catch {
+      } catch (err) {
+        console.error('Backend check failed:', err);
         setBackendStatus('offline');
       }
     };
@@ -27,25 +31,56 @@ function App() {
 
   if (backendStatus === 'checking') {
     return (
-      <div className="app loading-screen">
-        <div className="spinner"></div>
-        <p>Connecting to backend...</p>
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        minHeight: '100vh',
+        backgroundColor: '#0f1419',
+        color: 'white'
+      }}>
+        <div style={{
+          width: '40px',
+          height: '40px',
+          border: '3px solid #38444d',
+          borderTopColor: '#1d9bf0',
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite'
+        }}></div>
+        <p style={{ marginTop: '1rem' }}>Connecting to backend...</p>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
   }
 
   if (backendStatus === 'offline') {
     return (
-      <div className="app error-screen">
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        minHeight: '100vh',
+        backgroundColor: '#0f1419',
+        color: 'white',
+        padding: '2rem',
+        textAlign: 'center'
+      }}>
         <h1>⚠️ Backend Offline</h1>
         <p>Could not connect to the API server at <code>http://localhost:8000</code></p>
-        <div className="instructions">
+        <div style={{ margin: '1.5rem 0', textAlign: 'left', background: '#1a2332', padding: '1.5rem', borderRadius: '8px' }}>
           <p>Please start the backend server:</p>
-          <pre>cd visualization/backend && python -m api.app</pre>
+          <pre style={{ background: '#0f1419', padding: '0.75rem', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.85rem', margin: '0.5rem 0' }}>cd visualization/backend && python -m api.app</pre>
           <p>Or use the run script:</p>
-          <pre>./visualization/run.sh</pre>
+          <pre style={{ background: '#0f1419', padding: '0.75rem', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.85rem', margin: '0.5rem 0' }}>./visualization/run.sh</pre>
         </div>
-        <button onClick={() => window.location.reload()}>Retry Connection</button>
+        <button 
+          onClick={() => window.location.reload()}
+          style={{ padding: '0.75rem 1.5rem', background: '#1d9bf0', border: 'none', borderRadius: '8px', color: 'white', fontSize: '1rem', cursor: 'pointer' }}
+        >
+          Retry Connection
+        </button>
       </div>
     );
   }

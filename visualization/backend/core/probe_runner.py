@@ -68,13 +68,17 @@ class ProbeRunner:
         
         for probe_file in CHECKPOINTS_DIR.glob(pattern):
             # Parse filename: clf_{model}_{dataset}_layer-{N}_token-{type}.pkl
-            parts = probe_file.stem.split("_")
-            layer_part = [p for p in parts if p.startswith("layer-")]
-            token_part = [p for p in parts if p.startswith("token-")]
+            # Token type can contain underscores (e.g., exact_answer_last_token)
+            filename = probe_file.stem
             
-            if layer_part and token_part:
-                layer = int(layer_part[0].replace("layer-", ""))
-                token = token_part[0].replace("token-", "")
+            # Find layer-N pattern
+            import re
+            layer_match = re.search(r'_layer-(\d+)_', filename)
+            token_match = re.search(r'_token-(.+)$', filename)
+            
+            if layer_match and token_match:
+                layer = int(layer_match.group(1))
+                token = token_match.group(1)
                 probes.append({
                     "layer": layer,
                     "token": token,

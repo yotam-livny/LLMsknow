@@ -78,6 +78,17 @@ class AttentionExtractor:
                 return_dict=True
             )
         
+        # Check if attentions are available
+        if outputs.attentions is None:
+            logger.warning("Model did not return attention weights. "
+                          "This may be due to model configuration.")
+            # Return empty patterns with statistics
+            return {
+                "patterns": {},
+                "statistics": {},
+                "seq_len": input_ids.shape[1]
+            }
+        
         # outputs.attentions is tuple of (batch, num_heads, seq_len, seq_len) per layer
         attention_patterns = {}
         attention_stats = {}
@@ -193,22 +204,33 @@ class AttentionExtractor:
         # Compute entropy (measure of attention distribution)
         # Higher entropy = more distributed attention
         epsilon = 1e-10
+        # Clip values to avoid log(0)
+        clipped = np.clip(attention_matrix, epsilon, 1.0)
         entropy_per_query = -np.sum(
-            attention_matrix * np.log(attention_matrix + epsilon),
+            clipped * np.log(clipped),
             axis=-1
         )
-        mean_entropy = float(np.mean(entropy_per_query))
+        mean_entropy = float(np.nanmean(entropy_per_query))
+        # Replace NaN/Inf with 0
+        if not np.isfinite(mean_entropy):
+            mean_entropy = 0.0
         
         # Compute sparsity (fraction of near-zero attention)
         threshold = 0.01
         sparsity = float(np.mean(attention_matrix < threshold))
+        if not np.isfinite(sparsity):
+            sparsity = 0.0
         
         # Maximum attention weight
         max_attention = float(np.max(attention_matrix))
+        if not np.isfinite(max_attention):
+            max_attention = 0.0
         
         # Diagonal attention (self-attention strength)
         diagonal = np.diag(attention_matrix)
-        mean_self_attention = float(np.mean(diagonal))
+        mean_self_attention = float(np.nanmean(diagonal))
+        if not np.isfinite(mean_self_attention):
+            mean_self_attention = 0.0
         
         return {
             "entropy": mean_entropy,

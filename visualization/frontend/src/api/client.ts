@@ -110,6 +110,12 @@ export interface InferenceRequest {
   extract_attention?: boolean;
 }
 
+export interface TokenAlternative {
+  token_id: number;
+  token_text: string;
+  probability: number;
+}
+
 export interface InferenceResponse {
   model_id: string;
   question: string;
@@ -119,6 +125,7 @@ export interface InferenceResponse {
   input_token_count: number;
   output_token_count: number;
   total_token_count: number;
+  token_alternatives: TokenAlternative[][] | null;
   actual_correct: boolean | null;
   probe_predictions: Record<number, ProbePrediction> | null;
   probe_available: boolean;

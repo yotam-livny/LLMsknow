@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import api, { DatasetSample } from '../api/client';
+import api from '../api/client';
+
+interface DatasetSample {
+  index: number;
+  question: string;
+  answer: string | null;
+}
 
 export function SampleBrowser() {
   const { selectedDatasetId, selectedCombination, setSelectedSample } = useStore();

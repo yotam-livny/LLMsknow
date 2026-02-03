@@ -74,9 +74,12 @@ async def list_models():
     return get_models_summary()
 
 
-@app.get("/api/models/{model_id}/combinations", response_model=List[CombinationInfo], tags=["Models"])
+@app.get("/api/models/{model_id:path}/combinations", response_model=List[CombinationInfo], tags=["Models"])
 async def get_model_combinations(model_id: str):
     """Get available dataset combinations for a specific model."""
+    # URL decode the model_id (handles slashes like mistralai/Mistral-7B-Instruct-v0.2)
+    from urllib.parse import unquote
+    model_id = unquote(model_id)
     if model_id not in SUPPORTED_MODELS:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
     
@@ -219,17 +222,26 @@ async def run_inference(request: InferenceRequest):
         input_ids = mm.tokenize(request.question)
         input_length = input_ids.shape[1]
         
-        # Generate response
+        # Generate response with scores for alternatives
         output = mm.generate(
             input_ids,
             max_new_tokens=request.max_new_tokens,
             output_attentions=request.extract_attention,
-            output_hidden_states=request.extract_layers
+            output_hidden_states=request.extract_layers,
+            output_scores=True  # Capture logits for alternative tokens
         )
         
         # Get generated sequence
         generated_ids = output.sequences[0]
         generated_answer = mm.decode(generated_ids[input_length:])
+        
+        # Get top-k alternatives for each generated token
+        token_alternatives = None
+        if hasattr(output, 'scores') and output.scores:
+            try:
+                token_alternatives = mm.get_top_k_alternatives(output.scores, k=5)
+            except Exception as e:
+                logger.warning(f"Failed to get token alternatives: {e}")
         
         # Build token info
         tokens = []
@@ -269,29 +281,42 @@ async def run_inference(request: InferenceRequest):
         attention_data = None
         if request.extract_attention:
             logger.debug("Extracting attention patterns...")
-            attn_extractor = AttentionExtractor(model, request.model_id)
-            attn_result = attn_extractor.extract_attention_patterns(generated_ids.unsqueeze(0))
-            attention_data = {
-                "model_id": request.model_id,
-                "patterns": attn_result["patterns"],
-                "statistics": {
-                    layer_idx: {
-                        head_idx: AttentionHeadStats(**head_stats)
-                        for head_idx, head_stats in heads.items()
+            try:
+                attn_extractor = AttentionExtractor(model, request.model_id)
+                attn_result = attn_extractor.extract_attention_patterns(generated_ids.unsqueeze(0))
+                
+                # Only set attention_data if we got actual patterns
+                if attn_result["patterns"]:
+                    attention_data = {
+                        "model_id": request.model_id,
+                        "patterns": attn_result["patterns"],
+                        "statistics": {
+                            layer_idx: {
+                                head_idx: AttentionHeadStats(**head_stats)
+                                for head_idx, head_stats in heads.items()
+                            }
+                            for layer_idx, heads in attn_result["statistics"].items()
+                        },
+                        "seq_len": attn_result["seq_len"],
+                        "num_layers": SUPPORTED_MODELS[request.model_id]["num_layers"],
+                        "num_heads": SUPPORTED_MODELS[request.model_id]["num_heads"]
                     }
-                    for layer_idx, heads in attn_result["statistics"].items()
-                },
-                "seq_len": attn_result["seq_len"],
-                "num_layers": SUPPORTED_MODELS[request.model_id]["num_layers"],
-                "num_heads": SUPPORTED_MODELS[request.model_id]["num_heads"]
-            }
-            _current_session["attention_data"] = attention_data
+                    _current_session["attention_data"] = attention_data
+                else:
+                    logger.warning("Attention extraction returned empty patterns")
+            except Exception as e:
+                logger.warning(f"Attention extraction failed: {e}")
         
         # Check actual correctness if expected answer provided
         actual_correct = None
         if request.expected_answer:
-            # Simple substring match for now
-            actual_correct = request.expected_answer.lower().strip() in generated_answer.lower()
+            from core.correctness import compute_correctness
+            actual_correct = compute_correctness(
+                dataset_id=request.dataset_id or "default",
+                model_answer=generated_answer,
+                expected_answer=request.expected_answer,
+                wrong_answer=getattr(request, 'wrong_answer', None)
+            )
         
         # Try to run probe predictions if available
         probe_predictions = None
@@ -323,6 +348,15 @@ async def run_inference(request: InferenceRequest):
                 logger.warning(f"Failed to run probes: {e}")
         
         # Build response
+        # Convert alternatives to schema format
+        formatted_alternatives = None
+        if token_alternatives:
+            from api.schemas import TokenAlternative
+            formatted_alternatives = [
+                [TokenAlternative(**alt) for alt in step_alts]
+                for step_alts in token_alternatives
+            ]
+        
         response = InferenceResponse(
             model_id=request.model_id,
             question=request.question,
@@ -332,6 +366,7 @@ async def run_inference(request: InferenceRequest):
             input_token_count=input_length,
             output_token_count=output_length,
             total_token_count=total_length,
+            token_alternatives=formatted_alternatives,
             actual_correct=actual_correct,
             probe_predictions=probe_predictions,
             probe_available=probe_available,

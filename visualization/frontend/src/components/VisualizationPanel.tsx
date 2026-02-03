@@ -1,19 +1,19 @@
+import { useState } from 'react';
 import { useStore } from '../store/useStore';
-import { LayerView } from './LayerView';
 import { AttentionView } from './AttentionView';
+import { AlternativesView } from './AlternativesView';
+
+type ViewTab = 'attention' | 'alternatives';
 
 export function VisualizationPanel() {
+  const [activeTab, setActiveTab] = useState<ViewTab>('attention');
   const { 
     inferenceResult, 
-    layerData, 
     attentionData,
-    viewMode,
-    setViewMode,
-    showInputTokens,
-    setShowInputTokens
   } = useStore();
 
-  const hasData = inferenceResult && (layerData || attentionData);
+  const hasData = inferenceResult && attentionData;
+  const hasAlternatives = inferenceResult?.token_alternatives && inferenceResult.token_alternatives.length > 0;
 
   return (
     <div className="visualization-panel">
@@ -21,32 +21,21 @@ export function VisualizationPanel() {
         <h3>📊 Visualization</h3>
         
         {hasData && (
-          <div className="viz-controls">
-            <div className="view-mode-selector">
-              <button 
-                className={viewMode === 'layer' ? 'active' : ''}
-                onClick={() => setViewMode('layer')}
-                disabled={!layerData}
-              >
-                Layer Flow
-              </button>
-              <button 
-                className={viewMode === 'attention' ? 'active' : ''}
-                onClick={() => setViewMode('attention')}
-                disabled={!attentionData}
-              >
-                Attention Flow
-              </button>
-            </div>
-
-            <label className="toggle-label">
-              <input 
-                type="checkbox" 
-                checked={showInputTokens}
-                onChange={(e) => setShowInputTokens(e.target.checked)}
-              />
-              Show input tokens
-            </label>
+          <div className="viz-tabs">
+            <button 
+              className={activeTab === 'attention' ? 'active' : ''}
+              onClick={() => setActiveTab('attention')}
+            >
+              🔍 Attention
+            </button>
+            <button 
+              className={activeTab === 'alternatives' ? 'active' : ''}
+              onClick={() => setActiveTab('alternatives')}
+              disabled={!hasAlternatives}
+              title={hasAlternatives ? 'View token alternatives' : 'Restart backend to enable'}
+            >
+              🎯 Alternatives
+            </button>
           </div>
         )}
       </div>
@@ -54,9 +43,9 @@ export function VisualizationPanel() {
       <div className="viz-content">
         {!hasData ? (
           <div className="empty-state">
-            <div className="empty-icon">📈</div>
+            <div className="empty-icon">🔍</div>
             <h4>No visualization data</h4>
-            <p>Select a sample and run inference to see layer representations and attention patterns</p>
+            <p>Select a sample and run inference to see attention patterns</p>
             <div className="steps">
               <div className="step">1. Select a model</div>
               <div className="step">2. Select a dataset</div>
@@ -65,10 +54,10 @@ export function VisualizationPanel() {
             </div>
           </div>
         ) : (
-          <div className="viz-views">
-            {viewMode === 'layer' && layerData && <LayerView />}
-            {viewMode === 'attention' && attentionData && <AttentionView />}
-          </div>
+          <>
+            {activeTab === 'attention' && <AttentionView />}
+            {activeTab === 'alternatives' && <AlternativesView />}
+          </>
         )}
       </div>
     </div>

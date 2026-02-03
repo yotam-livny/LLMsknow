@@ -103,9 +103,17 @@ class ModelManager:
             logger.debug(f"Tokenizer loaded for {model_id}")
             
             # Prepare load arguments
+            # Use float16 for MPS (Apple Silicon) since bfloat16 is not fully supported
+            if cls._device == "mps":
+                dtype = torch.float16
+                logger.info("Using float16 for MPS compatibility")
+            else:
+                dtype = torch.bfloat16
+            
             load_kwargs = {
-                'torch_dtype': torch.bfloat16,
+                'torch_dtype': dtype,
                 'low_cpu_mem_usage': True,
+                'attn_implementation': 'eager',  # Required for output_attentions=True
             }
             
             # Handle quantization
@@ -210,7 +218,8 @@ class ModelManager:
         do_sample: bool = False,
         temperature: float = 1.0,
         output_attentions: bool = False,
-        output_hidden_states: bool = False
+        output_hidden_states: bool = False,
+        output_scores: bool = False
     ) -> dict:
         """
         Generate text from input IDs.
@@ -222,6 +231,7 @@ class ModelManager:
             temperature: Sampling temperature
             output_attentions: Whether to return attention weights
             output_hidden_states: Whether to return hidden states
+            output_scores: Whether to return generation scores (logits)
             
         Returns:
             Generation output dictionary
@@ -237,10 +247,46 @@ class ModelManager:
                 temperature=temperature,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
+                output_scores=output_scores,
                 return_dict_in_generate=True,
             )
         
         return output
+    
+    @classmethod
+    def get_top_k_alternatives(cls, scores: tuple, k: int = 5) -> list:
+        """
+        Get top-k alternative tokens for each generation step.
+        
+        Args:
+            scores: Tuple of score tensors from generation (one per step)
+            k: Number of alternatives to return
+            
+        Returns:
+            List of dicts, one per generated token, each containing top-k alternatives
+        """
+        if cls._tokenizer is None:
+            raise RuntimeError("No tokenizer loaded")
+        
+        import torch.nn.functional as F
+        
+        alternatives = []
+        for step_scores in scores:
+            # step_scores shape: (batch_size, vocab_size)
+            probs = F.softmax(step_scores[0], dim=-1)  # Get first batch item
+            top_probs, top_indices = torch.topk(probs, k)
+            
+            step_alternatives = []
+            for prob, idx in zip(top_probs.tolist(), top_indices.tolist()):
+                token_text = cls._tokenizer.decode([idx])
+                step_alternatives.append({
+                    "token_id": idx,
+                    "token_text": token_text,
+                    "probability": prob
+                })
+            alternatives.append(step_alternatives)
+        
+        return alternatives
     
     @classmethod
     def decode(cls, token_ids: torch.Tensor) -> str:

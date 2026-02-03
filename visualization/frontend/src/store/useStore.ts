@@ -1,10 +1,51 @@
 import { create } from 'zustand';
-import { 
-  ModelSummary, CombinationInfo, DatasetSample, 
-  InferenceResponse, LayerDataResponse, AttentionDataResponse 
+import type { 
+  ModelSummary, CombinationInfo, DatasetSample
 } from '../api/client';
 
-type ViewMode = 'layer' | 'attention' | 'dimension';
+type ViewMode = 'overview' | 'correctness' | 'layer' | 'attention';
+
+// Define these types locally to avoid module resolution issues
+interface TokenAlternative {
+  token_id: number;
+  token_text: string;
+  probability: number;
+}
+
+interface InferenceResponse {
+  model_id: string;
+  question: string;
+  generated_answer: string;
+  expected_answer: string | null;
+  tokens: Array<{ id: number; text: string; position: number; is_input: boolean }>;
+  input_token_count: number;
+  output_token_count: number;
+  total_token_count: number;
+  token_alternatives: TokenAlternative[][] | null;
+  actual_correct: boolean | null;
+  probe_predictions: Record<number, { layer: number; token: string; prediction: number; confidence: number; probabilities: number[] }> | null;
+  probe_available: boolean;
+  has_layer_data: boolean;
+  has_attention_data: boolean;
+}
+
+interface LayerDataResponse {
+  model_id: string;
+  layers: Record<number, number[][]>;
+  layer_stats: Record<number, { mean: number; std: number; min: number; max: number; norm: number }>;
+  seq_len: number;
+  num_layers: number;
+  hidden_size: number;
+}
+
+interface AttentionDataResponse {
+  model_id: string;
+  patterns: Record<number, Record<number, number[][]>>;
+  statistics: Record<number, Record<number, { entropy: number; sparsity: number; max_attention: number; mean_self_attention: number }>>;
+  seq_len: number;
+  num_layers: number;
+  num_heads: number;
+}
 
 interface AppState {
   // Selected values
@@ -86,7 +127,7 @@ const initialState = {
   inferenceResult: null,
   layerData: null,
   attentionData: null,
-  viewMode: 'layer' as ViewMode,
+  viewMode: 'overview' as ViewMode,
   showInputTokens: true,
   isLoading: false,
   error: null,

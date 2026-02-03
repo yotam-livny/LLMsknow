@@ -123,6 +123,13 @@ class ProbePrediction(BaseModel):
     probabilities: List[float]
 
 
+class TokenAlternative(BaseModel):
+    """A single alternative token option."""
+    token_id: int
+    token_text: str
+    probability: float
+
+
 class InferenceResponse(BaseModel):
     """Full inference result with optional extractions."""
     # Basic info
@@ -136,6 +143,9 @@ class InferenceResponse(BaseModel):
     input_token_count: int
     output_token_count: int
     total_token_count: int
+    
+    # Token alternatives (top-k for each generated token)
+    token_alternatives: Optional[List[List[TokenAlternative]]] = None
     
     # Correctness info
     actual_correct: Optional[bool] = None  # Objective correctness if expected_answer provided

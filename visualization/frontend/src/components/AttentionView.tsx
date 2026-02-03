@@ -4,9 +4,16 @@ import { useStore } from '../store/useStore';
 
 export function AttentionView() {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [selectedLayer, setSelectedLayer] = useState(0);
-  const [selectedHead, setSelectedHead] = useState(0);
-  const { attentionData, inferenceResult } = useStore();
+  const [selectedLayer, setSelectedLayer] = useState(15);
+  const [selectedHead, setSelectedHead] = useState<number | 'avg'>('avg');
+  const { 
+    attentionData, 
+    inferenceResult, 
+    selectedTokenIndex,
+    setSelectedTokenIndex 
+  } = useStore();
+
+  const tokenIdx = selectedTokenIndex ?? (inferenceResult ? inferenceResult.input_token_count - 1 : 0);
 
   useEffect(() => {
     if (!svgRef.current || !attentionData || !inferenceResult) return;
@@ -14,9 +21,14 @@ export function AttentionView() {
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
 
-    const margin = { top: 40, right: 20, bottom: 60, left: 60 };
-    const width = 500 - margin.left - margin.right;
-    const height = 500 - margin.top - margin.bottom;
+    const numHeads = attentionData.num_heads;
+    const tokens = inferenceResult.tokens;
+    const numTokens = tokens.length;
+
+    const margin = { top: 50, right: 30, bottom: 50, left: 150 };
+    const barHeight = 28;
+    const width = 700 - margin.left - margin.right;
+    const height = numTokens * barHeight;
 
     const g = svg
       .attr('width', width + margin.left + margin.right)
@@ -24,89 +36,156 @@ export function AttentionView() {
       .append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`);
 
-    // Get attention pattern for selected layer and head
-    const pattern = attentionData.patterns[selectedLayer]?.[selectedHead];
-    if (!pattern) return;
+    // Get attention based on selected head
+    let attention: number[] = Array(numTokens).fill(0);
+    
+    if (selectedHead === 'avg') {
+      // Average across all heads
+      let validHeads = 0;
+      for (let head = 0; head < numHeads; head++) {
+        const pattern = attentionData.patterns[selectedLayer]?.[head];
+        const tokenAttention = pattern?.[tokenIdx];
+        if (tokenAttention) {
+          tokenAttention.forEach((att, i) => {
+            if (i < numTokens) attention[i] += att;
+          });
+          validHeads++;
+        }
+      }
+      if (validHeads > 0) {
+        attention = attention.map(a => a / validHeads);
+      }
+    } else {
+      // Single head
+      const pattern = attentionData.patterns[selectedLayer]?.[selectedHead];
+      const tokenAttention = pattern?.[tokenIdx];
+      if (tokenAttention) {
+        tokenAttention.forEach((att, i) => {
+          if (i < numTokens) attention[i] = att;
+        });
+      }
+    }
 
-    const seqLen = pattern.length;
+    const maxAtt = Math.max(...attention, 0.01);
 
-    // Scales
-    const xScale = d3.scaleBand()
-      .domain(d3.range(seqLen).map(String))
-      .range([0, width])
-      .padding(0.02);
+    // X scale for attention bars
+    const xScale = d3.scaleLinear()
+      .domain([0, maxAtt * 1.1])
+      .range([0, width]);
 
-    const yScale = d3.scaleBand()
-      .domain(d3.range(seqLen).map(String))
-      .range([0, height])
-      .padding(0.02);
-
+    // Color scale
     const colorScale = d3.scaleSequential(d3.interpolateBlues)
-      .domain([0, 1]);
+      .domain([0, maxAtt]);
 
-    // Prepare data
-    const cells: { x: number; y: number; value: number }[] = [];
-    pattern.forEach((row, i) => {
-      row.forEach((value, j) => {
-        cells.push({ x: j, y: i, value });
-      });
-    });
-
-    // Draw cells
-    g.selectAll('rect')
-      .data(cells)
+    // Draw bars for each token
+    g.selectAll('rect.att-bar')
+      .data(attention)
       .enter()
       .append('rect')
-      .attr('x', d => xScale(String(d.x)) || 0)
-      .attr('y', d => yScale(String(d.y)) || 0)
-      .attr('width', xScale.bandwidth())
-      .attr('height', yScale.bandwidth())
-      .attr('fill', d => colorScale(d.value))
-      .append('title')
-      .text(d => {
-        const fromToken = inferenceResult.tokens[d.y]?.text.slice(0, 10) || `pos ${d.y}`;
-        const toToken = inferenceResult.tokens[d.x]?.text.slice(0, 10) || `pos ${d.x}`;
-        return `"${fromToken}" → "${toToken}"\nAttention: ${d.value.toFixed(4)}`;
+      .attr('class', 'att-bar')
+      .attr('x', 0)
+      .attr('y', (_, i) => i * barHeight + 3)
+      .attr('width', d => xScale(d))
+      .attr('height', barHeight - 6)
+      .attr('fill', d => colorScale(d))
+      .attr('rx', 4)
+      .style('cursor', 'pointer')
+      .on('mouseover', function(event, d) {
+        d3.select(this).attr('stroke', '#fff').attr('stroke-width', 2);
+        
+        const idx = attention.indexOf(d);
+        
+        const tooltip = g.append('g')
+          .attr('class', 'tooltip')
+          .attr('transform', `translate(${xScale(d) + 10},${idx * barHeight + barHeight / 2})`);
+        
+        tooltip.append('rect')
+          .attr('x', 0)
+          .attr('y', -12)
+          .attr('width', 80)
+          .attr('height', 24)
+          .attr('fill', '#1a2332')
+          .attr('stroke', '#38444d')
+          .attr('rx', 4);
+        
+        tooltip.append('text')
+          .attr('x', 40)
+          .attr('y', 4)
+          .attr('text-anchor', 'middle')
+          .style('fill', '#fff')
+          .style('font-size', '11px')
+          .text(`${(d * 100).toFixed(1)}%`);
+      })
+      .on('mouseout', function() {
+        d3.select(this).attr('stroke', 'none');
+        g.selectAll('.tooltip').remove();
+      })
+      .on('click', (_, d) => {
+        const idx = attention.indexOf(d);
+        setSelectedTokenIndex(idx);
       });
 
-    // X axis (Key positions)
+    // Highlight selected token row
+    g.append('rect')
+      .attr('x', -margin.left + 5)
+      .attr('y', tokenIdx * barHeight)
+      .attr('width', margin.left + width - 10)
+      .attr('height', barHeight)
+      .attr('fill', 'none')
+      .attr('stroke', '#fbbf24')
+      .attr('stroke-width', 2)
+      .attr('rx', 4);
+
+    // Token labels on left
+    g.selectAll('text.token-label')
+      .data(tokens)
+      .enter()
+      .append('text')
+      .attr('class', 'token-label')
+      .attr('x', -10)
+      .attr('y', (_, i) => i * barHeight + barHeight / 2 + 5)
+      .attr('text-anchor', 'end')
+      .style('fill', (_, i) => i === tokenIdx ? '#fbbf24' : '#aaa')
+      .style('font-size', '12px')
+      .style('font-weight', (_, i) => i === tokenIdx ? 'bold' : 'normal')
+      .text((d, i) => `${i}: ${d.text.slice(0, 12)}`);
+
+    // X axis
     g.append('g')
       .attr('transform', `translate(0,${height})`)
-      .call(d3.axisBottom(xScale).tickFormat((_, i) => i % 5 === 0 ? String(i) : ''))
+      .call(d3.axisBottom(xScale).ticks(5).tickFormat(d => `${((d as number) * 100).toFixed(0)}%`))
       .selectAll('text')
-      .style('font-size', '10px');
+      .style('fill', '#aaa')
+      .style('font-size', '12px');
 
     g.append('text')
       .attr('x', width / 2)
-      .attr('y', height + 45)
+      .attr('y', height + 40)
       .attr('text-anchor', 'middle')
-      .style('fill', '#888')
-      .text('Key Position (attends to)');
-
-    // Y axis (Query positions)
-    g.append('g')
-      .call(d3.axisLeft(yScale).tickFormat((_, i) => i % 5 === 0 ? String(i) : ''))
-      .selectAll('text')
-      .style('font-size', '10px');
-
-    g.append('text')
-      .attr('transform', 'rotate(-90)')
-      .attr('x', -height / 2)
-      .attr('y', -45)
-      .attr('text-anchor', 'middle')
-      .style('fill', '#888')
-      .text('Query Position (from)');
+      .style('fill', '#aaa')
+      .style('font-size', '13px')
+      .text('Attention Weight');
 
     // Title
+    const sourceToken = tokens[tokenIdx]?.text || `Token ${tokenIdx}`;
+    const headLabel = selectedHead === 'avg' ? 'all heads (avg)' : `head ${selectedHead}`;
     g.append('text')
       .attr('x', width / 2)
-      .attr('y', -15)
+      .attr('y', -25)
       .attr('text-anchor', 'middle')
-      .style('font-size', '14px')
+      .style('font-size', '16px')
       .style('fill', '#fff')
-      .text(`Attention Pattern - Layer ${selectedLayer}, Head ${selectedHead}`);
+      .text(`Where "${sourceToken.slice(0, 15)}" attends`);
 
-  }, [attentionData, inferenceResult, selectedLayer, selectedHead]);
+    g.append('text')
+      .attr('x', width / 2)
+      .attr('y', -6)
+      .attr('text-anchor', 'middle')
+      .style('font-size', '12px')
+      .style('fill', '#888')
+      .text(`Layer ${selectedLayer}, ${headLabel}`);
+
+  }, [attentionData, inferenceResult, tokenIdx, selectedLayer, selectedHead]);
 
   if (!attentionData || !inferenceResult) {
     return (
@@ -116,98 +195,67 @@ export function AttentionView() {
     );
   }
 
-  const stats = attentionData.statistics[selectedLayer]?.[selectedHead];
-
   return (
     <div className="attention-view">
       <div className="view-header">
-        <h3>Attention Flow</h3>
-        <div className="selectors">
-          <label>
-            Layer:
+        <h3>🔍 Attention Pattern</h3>
+        <div className="attention-controls">
+          <div className="control-group">
+            <label>Source token:</label>
             <select 
-              value={selectedLayer} 
-              onChange={(e) => setSelectedLayer(Number(e.target.value))}
+              value={tokenIdx} 
+              onChange={(e) => setSelectedTokenIndex(Number(e.target.value))}
             >
-              {Array.from({ length: attentionData.num_layers }, (_, i) => (
-                <option key={i} value={i}>Layer {i}</option>
+              {inferenceResult.tokens.map((token, idx) => (
+                <option key={idx} value={idx}>
+                  {idx}: "{token.text.slice(0, 12) || '(empty)'}"
+                </option>
               ))}
             </select>
-          </label>
-          <label>
-            Head:
-            <select 
-              value={selectedHead} 
-              onChange={(e) => setSelectedHead(Number(e.target.value))}
-            >
-              {Array.from({ length: attentionData.num_heads }, (_, i) => (
-                <option key={i} value={i}>Head {i}</option>
-              ))}
-            </select>
-          </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="layer-head-controls">
+        <div className="control-group">
+          <label>Layer:</label>
+          <input 
+            type="range" 
+            min={0} 
+            max={attentionData.num_layers - 1} 
+            value={selectedLayer}
+            onChange={(e) => setSelectedLayer(Number(e.target.value))}
+            className="layer-slider"
+          />
+          <span className="slider-value">{selectedLayer}</span>
+        </div>
+        <div className="control-group">
+          <label>Head:</label>
+          <select 
+            value={selectedHead} 
+            onChange={(e) => setSelectedHead(e.target.value === 'avg' ? 'avg' : Number(e.target.value))}
+          >
+            <option value="avg">Average (all heads)</option>
+            {Array.from({ length: attentionData.num_heads }, (_, i) => (
+              <option key={i} value={i}>Head {i}</option>
+            ))}
+          </select>
         </div>
       </div>
 
       <div className="attention-content">
-        <svg ref={svgRef}></svg>
-        
-        {stats && (
-          <div className="attention-stats">
-            <h4>Head Statistics</h4>
-            <div className="stats-grid">
-              <div className="stat">
-                <label>Entropy</label>
-                <span>{stats.entropy.toFixed(4)}</span>
-                <small>Higher = more distributed</small>
-              </div>
-              <div className="stat">
-                <label>Sparsity</label>
-                <span>{(stats.sparsity * 100).toFixed(1)}%</span>
-                <small>Near-zero weights</small>
-              </div>
-              <div className="stat">
-                <label>Max Attention</label>
-                <span>{stats.max_attention.toFixed(4)}</span>
-                <small>Strongest focus</small>
-              </div>
-              <div className="stat">
-                <label>Self-Attention</label>
-                <span>{stats.mean_self_attention.toFixed(4)}</span>
-                <small>Diagonal average</small>
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="attention-chart-wrapper">
+          <svg ref={svgRef}></svg>
+        </div>
       </div>
 
-      <div className="head-overview">
-        <h4>All Heads Overview</h4>
-        <div className="head-grid">
-          {Array.from({ length: attentionData.num_layers }, (_, layer) => (
-            <div key={layer} className="layer-row">
-              <span className="layer-label">L{layer}</span>
-              {Array.from({ length: attentionData.num_heads }, (_, head) => {
-                const headStats = attentionData.statistics[layer]?.[head];
-                const entropy = headStats?.entropy || 0;
-                const isSelected = layer === selectedLayer && head === selectedHead;
-                return (
-                  <div
-                    key={head}
-                    className={`head-cell ${isSelected ? 'selected' : ''}`}
-                    style={{
-                      backgroundColor: `hsl(200, ${Math.min(entropy * 20, 100)}%, ${30 + entropy * 10}%)`
-                    }}
-                    onClick={() => {
-                      setSelectedLayer(layer);
-                      setSelectedHead(head);
-                    }}
-                    title={`Layer ${layer}, Head ${head}\nEntropy: ${entropy.toFixed(3)}`}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
+      <div className="attention-explanation">
+        <h4>How to read</h4>
+        <ul>
+          <li><strong>Yellow border</strong> = Source token (the one we're analyzing)</li>
+          <li><strong>Bar length</strong> = How much the source token "looks at" each target</li>
+          <li><strong>Click a bar</strong> to switch to that token as source</li>
+        </ul>
       </div>
     </div>
   );

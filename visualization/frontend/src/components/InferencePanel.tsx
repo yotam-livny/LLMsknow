@@ -8,7 +8,6 @@ export function InferencePanel() {
     selectedModelId,
     selectedDatasetId,
     selectedSample,
-    selectedCombination,
     modelLoaded,
     modelLoading,
     inferenceRunning,
@@ -90,6 +89,21 @@ export function InferencePanel() {
       setInferenceRunning(false);
     }
   };
+
+  // Get probe prediction info
+  const getProbeInfo = () => {
+    if (!inferenceResult?.probe_predictions) return null;
+    const entries = Object.entries(inferenceResult.probe_predictions);
+    if (entries.length === 0) return null;
+    const [layer, pred] = entries[entries.length - 1]; // Use last layer
+    return {
+      layer: parseInt(layer),
+      pCorrect: pred.probabilities[0],
+      isCorrect: pred.probabilities[0] > 0.5
+    };
+  };
+
+  const probeInfo = getProbeInfo();
 
   return (
     <div className="inference-panel">
@@ -180,17 +194,56 @@ export function InferencePanel() {
 
       {inferenceResult && (
         <div className="inference-result">
-          <div className="result-header">
-            <h4>Generated Answer</h4>
-            {inferenceResult.actual_correct !== null && (
-              <span className={`correctness ${inferenceResult.actual_correct ? 'correct' : 'incorrect'}`}>
-                {inferenceResult.actual_correct ? '✓ Correct' : '✗ Incorrect'}
-              </span>
-            )}
-          </div>
-          
+          <h4>Generated Answer</h4>
           <div className="answer-text">
             {inferenceResult.generated_answer || '(empty response)'}
+          </div>
+
+          {/* Consolidated Correctness Panel */}
+          <div className="correctness-panel-consolidated">
+            <div className="correctness-row">
+              <div className="correctness-item">
+                <span className="label">🧠 Probe Prediction:</span>
+                {probeInfo ? (
+                  <span className={`value ${probeInfo.isCorrect ? 'correct' : 'incorrect'}`}>
+                    {probeInfo.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                    <span className="detail">({(probeInfo.pCorrect * 100).toFixed(1)}% at Layer {probeInfo.layer})</span>
+                  </span>
+                ) : (
+                  <span className="value unknown">No probe available</span>
+                )}
+              </div>
+              
+              <div className="correctness-item">
+                <span className="label">📋 Ground Truth:</span>
+                {inferenceResult.actual_correct !== null ? (
+                  <span className={`value ${inferenceResult.actual_correct ? 'correct' : 'incorrect'}`}>
+                    {inferenceResult.actual_correct ? '✓ Correct' : '✗ Incorrect'}
+                  </span>
+                ) : (
+                  <span className="value unknown">Unknown</span>
+                )}
+              </div>
+            </div>
+
+            {/* Calibration check */}
+            {probeInfo && inferenceResult.actual_correct !== null && (
+              <div className={`calibration-row ${probeInfo.isCorrect === inferenceResult.actual_correct ? 'match' : 'mismatch'}`}>
+                {probeInfo.isCorrect === inferenceResult.actual_correct ? (
+                  <>✓ Model's self-assessment matches reality</>
+                ) : (
+                  <>⚠ Model is miscalibrated (self-assessment differs from reality)</>
+                )}
+              </div>
+            )}
+
+            {/* Expected answer */}
+            {inferenceResult.expected_answer && (
+              <div className="expected-answer-row">
+                <span className="label">Expected:</span>
+                <span className="value">{inferenceResult.expected_answer}</span>
+              </div>
+            )}
           </div>
 
           <TokenDisplay tokens={inferenceResult.tokens} />

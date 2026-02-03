@@ -1,5 +1,11 @@
-import { TokenInfo } from '../api/client';
 import { useStore } from '../store/useStore';
+
+interface TokenInfo {
+  id: number;
+  text: string;
+  position: number;
+  is_input: boolean;
+}
 
 interface TokenDisplayProps {
   tokens: TokenInfo[];
@@ -10,7 +16,6 @@ export function TokenDisplay({ tokens }: TokenDisplayProps) {
     selectedTokenIndex, 
     setSelectedTokenIndex,
     showInputTokens,
-    inferenceResult
   } = useStore();
 
   const displayTokens = showInputTokens 
@@ -54,21 +59,6 @@ export function TokenDisplay({ tokens }: TokenDisplayProps) {
           <span className="token-text">
             "{tokens[selectedTokenIndex]?.text || ''}"
           </span>
-        </div>
-      )}
-
-      {inferenceResult?.probe_predictions && Object.keys(inferenceResult.probe_predictions).length > 0 && (
-        <div className="probe-predictions">
-          <h4>Probe Predictions</h4>
-          {Object.entries(inferenceResult.probe_predictions).map(([layer, pred]) => (
-            <div key={layer} className={`prediction ${pred.prediction === 0 ? 'correct' : 'incorrect'}`}>
-              <span>Layer {layer}:</span>
-              <span className="confidence">
-                {pred.prediction === 0 ? '✓ Correct' : '✗ Incorrect'} 
-                ({(pred.confidence * 100).toFixed(1)}%)
-              </span>
-            </div>
-          ))}
         </div>
       )}
     </div>
