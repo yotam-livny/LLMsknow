@@ -36,26 +36,19 @@ interface CorrectnessEvolutionData {
 }
 
 export function CorrectnessEvolutionView() {
-  const { inferenceResult } = useStore();
+  const { inferenceResult, selectedTokenIndex } = useStore();
   const [evolutionData, setEvolutionData] = useState<CorrectnessEvolutionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTokenPosition, setSelectedTokenPosition] = useState<number | null>(null);
   const chartRef = useRef<SVGSVGElement>(null);
 
   // Stable reference for inference result ID to track changes
-  const inferenceId = inferenceResult?.generated_answer || null;
   const hasLayerData = inferenceResult?.has_layer_data || false;
   const tokenCount = inferenceResult?.tokens?.length || 0;
 
-  // Reset token selection to last token when inference changes
-  useEffect(() => {
-    if (tokenCount > 0) {
-      setSelectedTokenPosition(tokenCount - 1);
-    } else {
-      setSelectedTokenPosition(null);
-    }
-  }, [inferenceId, tokenCount]);
+  // Use global selectedTokenIndex, default to last token if not set
+  const selectedTokenPosition = selectedTokenIndex !== null ? selectedTokenIndex : 
+    (tokenCount > 0 ? tokenCount - 1 : null);
 
   // Fetch correctness evolution when token selection changes (and is valid)
   useEffect(() => {
@@ -86,12 +79,22 @@ export function CorrectnessEvolutionView() {
 
   // Render D3 chart when data changes
   useEffect(() => {
-    if (!chartRef.current || !evolutionData?.layer_predictions.length) return;
+    console.log('Chart useEffect triggered', {
+      hasChartRef: !!chartRef.current,
+      hasEvolutionData: !!evolutionData,
+      layerPredictionsCount: evolutionData?.layer_predictions?.length
+    });
+    
+    if (!chartRef.current || !evolutionData?.layer_predictions.length) {
+      console.log('Skipping chart render - missing ref or data');
+      return;
+    }
 
     const svg = d3.select(chartRef.current);
     svg.selectAll('*').remove();
 
     const predictions = evolutionData.layer_predictions;
+    console.log('Rendering chart with predictions:', predictions);
     
     // Dimensions
     const margin = { top: 30, right: 30, bottom: 50, left: 60 };
@@ -104,9 +107,9 @@ export function CorrectnessEvolutionView() {
       .append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`);
 
-    // Scales
+    // Scales - always show full layer range (0-31) for context
     const xScale = d3.scaleLinear()
-      .domain([0, d3.max(predictions, d => d.layer) || 32])
+      .domain([0, 31])
       .range([0, width]);
 
     const yScale = d3.scaleLinear()
@@ -178,7 +181,9 @@ export function CorrectnessEvolutionView() {
     gradient.append('stop').attr('offset', '0%').attr('stop-color', '#4CAF50');
     gradient.append('stop').attr('offset', '100%').attr('stop-color', 'transparent');
 
-    // Data points
+    // Data points - larger for single point, normal for multiple
+    const dotRadius = predictions.length === 1 ? 12 : 6;
+    
     g.selectAll('.dot')
       .data(predictions)
       .enter()
@@ -186,17 +191,17 @@ export function CorrectnessEvolutionView() {
       .attr('class', 'dot')
       .attr('cx', d => xScale(d.layer))
       .attr('cy', d => yScale(d.prob_correct))
-      .attr('r', 6)
+      .attr('r', dotRadius)
       .attr('fill', d => d.prob_correct > 0.5 ? '#4CAF50' : '#ff4444')
       .attr('stroke', '#fff')
       .attr('stroke-width', 2)
       .style('cursor', 'pointer')
       .on('mouseover', function(event, d) {
-        d3.select(this).attr('r', 9);
+        d3.select(this).attr('r', dotRadius + 3);
         // Tooltip
         const tooltip = g.append('g')
           .attr('class', 'tooltip')
-          .attr('transform', `translate(${xScale(d.layer)},${yScale(d.prob_correct) - 15})`);
+          .attr('transform', `translate(${xScale(d.layer)},${yScale(d.prob_correct) - 20})`);
         
         tooltip.append('rect')
           .attr('x', -50).attr('y', -30)
@@ -211,9 +216,24 @@ export function CorrectnessEvolutionView() {
           .text(`L${d.layer}: ${(d.prob_correct * 100).toFixed(1)}% correct`);
       })
       .on('mouseout', function() {
-        d3.select(this).attr('r', 6);
+        d3.select(this).attr('r', dotRadius);
         g.selectAll('.tooltip').remove();
       });
+    
+    // Add value labels next to dots for single point
+    if (predictions.length === 1) {
+      g.selectAll('.dot-label')
+        .data(predictions)
+        .enter()
+        .append('text')
+        .attr('class', 'dot-label')
+        .attr('x', d => xScale(d.layer) + 18)
+        .attr('y', d => yScale(d.prob_correct) + 5)
+        .style('font-size', '14px')
+        .style('font-weight', '600')
+        .style('fill', d => d.prob_correct > 0.5 ? '#4CAF50' : '#ff4444')
+        .text(d => `${(d.prob_correct * 100).toFixed(1)}%`);
+    }
 
     // 50% threshold line
     g.append('line')
@@ -345,66 +365,7 @@ export function CorrectnessEvolutionView() {
         </p>
       </div>
 
-      {/* Consolidated Correctness Panel - At Top */}
-      <div className="correctness-panel-consolidated">
-        <div className="correctness-row probe-row">
-          <div className="correctness-item">
-            <span className="label">🧠 Before Generation:</span>
-            {probeInfoInput ? (
-              <span className={`value ${probeInfoInput.isCorrect ? 'correct' : 'incorrect'}`}>
-                {probeInfoInput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
-                <span className="detail">({(probeInfoInput.pCorrect * 100).toFixed(1)}% at L{probeInfoInput.layer}, tok {probeInfoInput.tokenPos})</span>
-              </span>
-            ) : (
-              <span className="value unknown">No probe</span>
-            )}
-          </div>
-          
-          <div className="correctness-item">
-            <span className="label">🧠 After Generation:</span>
-            {probeInfoOutput ? (
-              <span className={`value ${probeInfoOutput.isCorrect ? 'correct' : 'incorrect'}`}>
-                {probeInfoOutput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
-                <span className="detail">({(probeInfoOutput.pCorrect * 100).toFixed(1)}% at L{probeInfoOutput.layer}, tok {probeInfoOutput.tokenPos})</span>
-              </span>
-            ) : (
-              <span className="value unknown">No probe</span>
-            )}
-          </div>
-        </div>
-
-        <div className="correctness-row ground-truth-row">
-          <div className="correctness-item">
-            <span className="label">📋 Ground Truth:</span>
-            {inferenceResult?.actual_correct !== null ? (
-              <span className={`value ${inferenceResult.actual_correct ? 'correct' : 'incorrect'}`}>
-                {inferenceResult.actual_correct ? '✓ Correct' : '✗ Incorrect'}
-              </span>
-            ) : (
-              <span className="value unknown">Unknown</span>
-            )}
-          </div>
-          
-          {inferenceResult?.expected_answer && (
-            <div className="correctness-item">
-              <span className="label">Expected:</span>
-              <span className="value expected">{inferenceResult.expected_answer}</span>
-            </div>
-          )}
-        </div>
-
-        {probeInfoOutput && inferenceResult?.actual_correct !== null && (
-          <div className={`calibration-row ${probeInfoOutput.isCorrect === inferenceResult.actual_correct ? 'match' : 'mismatch'}`}>
-            {probeInfoOutput.isCorrect === inferenceResult.actual_correct ? (
-              <>✓ Model's final self-assessment matches reality</>
-            ) : (
-              <>⚠ Model is miscalibrated (final assessment differs from reality)</>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Exact Answer Section */}
+      {/* 1. Exact Answer Section - First */}
       <div className="exact-answer-section">
         <h4>🎯 Exact Answer Tokens</h4>
         {evolutionData.exact_answer.valid ? (
@@ -429,54 +390,101 @@ export function CorrectnessEvolutionView() {
         )}
       </div>
 
-      {/* Token Position Selector */}
-      <div className="token-selector-section">
-        <h4>📍 Measurement Position</h4>
-        <div className="token-selector-content">
-          <div className="current-measurement">
-            <span className="label">Currently measuring at:</span>
-            <span className="token-badge">
-              Token #{evolutionData.measured_token_position}: 
-              "{evolutionData.measured_token_text.replace(/\n/g, '↵').replace(/ /g, '·') || '□'}"
-            </span>
+      {/* 2. Correctness Panel - Second */}
+      <div className="correctness-panel-consolidated vertical">
+        {/* Expected */}
+        {inferenceResult?.expected_answer && (
+          <div className="correctness-row">
+            <span className="label">📝 Expected:</span>
+            <span className="value expected">{inferenceResult.expected_answer}</span>
           </div>
-          
-          <div className="token-selector">
-            <label>Select token position:</label>
-            <select 
-              value={selectedTokenPosition ?? (inferenceResult?.tokens.length ? inferenceResult.tokens.length - 1 : 0)}
-              onChange={(e) => {
-                setSelectedTokenPosition(parseInt(e.target.value));
-              }}
-            >
-              <optgroup label="Input Tokens">
-                {inferenceResult?.tokens.filter(t => t.is_input).map(token => (
-                  <option key={token.position} value={token.position}>
-                    #{token.position}: "{token.text.replace(/\n/g, '↵').replace(/ /g, '·').slice(0, 20)}"
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Output Tokens">
-                {inferenceResult?.tokens.filter(t => !t.is_input).map(token => (
-                  <option key={token.position} value={token.position}>
-                    #{token.position}: "{token.text.replace(/\n/g, '↵').replace(/ /g, '·').slice(0, 20)}"
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
+        )}
 
-          <p className="hint">
-            Select a token position to measure probe predictions at that point.
-          </p>
+        {/* Ground Truth */}
+        <div className="correctness-row">
+          <span className="label">📋 Ground Truth:</span>
+          {inferenceResult?.actual_correct !== null ? (
+            <span className={`value ${inferenceResult.actual_correct ? 'correct' : 'incorrect'}`}>
+              {inferenceResult.actual_correct ? '✓ Correct' : '✗ Incorrect'}
+            </span>
+          ) : (
+            <span className="value unknown">Unknown</span>
+          )}
+        </div>
+
+        {/* Before Generation */}
+        <div className="correctness-row">
+          <span className="label">🧠 Before Generation:</span>
+          {probeInfoInput ? (
+            <span className={`value ${probeInfoInput.isCorrect ? 'correct' : 'incorrect'}`}>
+              {probeInfoInput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+              <span className="detail">({(probeInfoInput.pCorrect * 100).toFixed(1)}% at L{probeInfoInput.layer}, tok {probeInfoInput.tokenPos})</span>
+            </span>
+          ) : (
+            <span className="value unknown">No probe</span>
+          )}
+        </div>
+
+        {/* After Generation */}
+        <div className="correctness-row">
+          <span className="label">🧠 After Generation:</span>
+          {probeInfoOutput ? (
+            <span className={`value ${probeInfoOutput.isCorrect ? 'correct' : 'incorrect'}`}>
+              {probeInfoOutput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+              <span className="detail">({(probeInfoOutput.pCorrect * 100).toFixed(1)}% at L{probeInfoOutput.layer}, tok {probeInfoOutput.tokenPos})</span>
+            </span>
+          ) : (
+            <span className="value unknown">No probe</span>
+          )}
+        </div>
+
+        {/* Calibration */}
+        {probeInfoOutput && inferenceResult?.actual_correct !== null && (
+          <div className={`calibration-row ${probeInfoOutput.isCorrect === inferenceResult.actual_correct ? 'match' : 'mismatch'}`}>
+            {probeInfoOutput.isCorrect === inferenceResult.actual_correct ? (
+              <>✓ Model's final self-assessment matches reality</>
+            ) : (
+              <>⚠ Model is miscalibrated (final assessment differs from reality)</>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 3. Interpretation - Third */}
+      <div className="interpretation-section">
+        <h4>💡 Interpretation</h4>
+        <p className="interpretation-text">{evolutionData.interpretation}</p>
+        
+        {evolutionData.actual_correct !== null && (
+          <div className={`ground-truth-badge ${evolutionData.actual_correct ? 'correct' : 'incorrect'}`}>
+            Ground Truth: {evolutionData.actual_correct ? '✓ Correct' : '✗ Incorrect'}
+          </div>
+        )}
+        
+        <div className="summary-stats-inline">
+          {evolutionData.first_confident_layer !== null && (
+            <span className="stat">First confident: L{evolutionData.first_confident_layer}</span>
+          )}
+          <span className="stat">
+            Peak: {(evolutionData.peak_confidence * 100).toFixed(1)}% at L{evolutionData.peak_confidence_layer}
+          </span>
+          <span className="stat">
+            Measured at: Token #{evolutionData.measured_token_position}
+          </span>
         </div>
       </div>
 
-      {/* Evolution Chart */}
+      {/* 4. Evolution Chart - Fourth */}
       {evolutionData.layer_predictions.length > 0 ? (
         <div className="evolution-chart-section">
           <h4>📊 Confidence Across Layers</h4>
           <svg ref={chartRef}></svg>
+          
+          {/* Debug info */}
+          <div className="chart-debug" style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.5rem' }}>
+            Data points: {evolutionData.layer_predictions.length} | 
+            Layers: {evolutionData.layer_predictions.map(p => `L${p.layer}: ${(p.prob_correct * 100).toFixed(1)}%`).join(', ')}
+          </div>
           
           <div className="chart-legend">
             <div className="legend-item">
@@ -497,66 +505,17 @@ export function CorrectnessEvolutionView() {
         </div>
       ) : (
         <div className="no-probes">
-          <p>⚠️ No multi-layer probe predictions available</p>
+          <p>⚠️ No probe predictions available</p>
           <p className="hint">
-            Train probes at multiple layers to see the full evolution.
-            Currently only layer 15 probe is available.
+            Train probes to see correctness predictions.
           </p>
-        </div>
-      )}
-
-      {/* Interpretation */}
-      <div className="interpretation-section">
-        <h4>💡 Interpretation</h4>
-        <p className="interpretation-text">{evolutionData.interpretation}</p>
-        
-        {/* Ground truth comparison */}
-        {evolutionData.actual_correct !== null && (
-          <div className={`ground-truth-badge ${evolutionData.actual_correct ? 'correct' : 'incorrect'}`}>
-            Ground Truth: {evolutionData.actual_correct ? '✓ Correct' : '✗ Incorrect'}
-          </div>
-        )}
-      </div>
-
-      {/* Summary Stats */}
-      <div className="summary-stats">
-        {evolutionData.first_confident_layer !== null && (
-          <div className="stat">
-            <span className="stat-label">First confident at</span>
-            <span className="stat-value">Layer {evolutionData.first_confident_layer}</span>
-          </div>
-        )}
-        <div className="stat">
-          <span className="stat-label">Peak confidence</span>
-          <span className="stat-value">
-            {(evolutionData.peak_confidence * 100).toFixed(1)}% at L{evolutionData.peak_confidence_layer}
-          </span>
-        </div>
-        {evolutionData.exact_answer.token_positions.length > 0 && (
-          <div className="stat">
-            <span className="stat-label">Measured at</span>
-            <span className="stat-value">
-              Token #{evolutionData.exact_answer.token_positions[evolutionData.exact_answer.token_positions.length - 1]}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Important note about token positions */}
-      {evolutionData.exact_answer.token_positions.length > 0 && (
-        <div className="token-position-note">
-          <strong>Note:</strong> This view measures probe predictions at the <em>exact answer tokens</em> 
-          (positions {evolutionData.exact_answer.token_positions.join(', ')}), 
-          which is where truthfulness information is concentrated according to the paper. 
-          The "Probe Prediction" shown above the tokens measures at the last <em>input</em> token (before generation).
         </div>
       )}
 
       {/* Paper reference */}
       <div className="paper-reference">
         <small>
-          Based on: <em>"LLMs Know More Than They Show"</em> - truthfulness information 
-          is concentrated in exact answer tokens.
+          Based on: <em>"LLMs Know More Than They Show"</em>
         </small>
       </div>
     </div>

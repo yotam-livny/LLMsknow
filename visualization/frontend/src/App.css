@@ -1560,6 +1560,18 @@ body {
   margin: 0.75rem 0;
 }
 
+.correctness-panel-consolidated.vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.correctness-panel-consolidated.vertical .correctness-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .correctness-row {
   display: flex;
   gap: 2rem;
@@ -2526,6 +2538,84 @@ body {
   border: 1px solid rgba(244, 67, 54, 0.5);
 }
 
+.summary-stats-inline {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border-color);
+}
+
+.summary-stats-inline .stat {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+/* Single Probe Result */
+.single-probe-result {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+}
+
+.single-probe-result h4 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: var(--accent-blue);
+}
+
+.single-probe-display {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.prob-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.prob-bar-container .prob-bar {
+  height: 32px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  min-width: 100px;
+  transition: width 0.3s ease;
+}
+
+.prob-bar-container .prob-bar.correct {
+  background: linear-gradient(90deg, #4CAF50, #81C784);
+}
+
+.prob-bar-container .prob-bar.incorrect {
+  background: linear-gradient(90deg, #f44336, #e57373);
+}
+
+.prob-bar-container .prob-label {
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.prob-bar-container .prob-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 60px;
+}
+
+.single-probe-result .hint {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 /* Summary Stats */
 .summary-stats {
   display: flex;
@@ -2949,7 +3039,7 @@ body {
   color: var(--text-primary);
 }
 
-.loading-state, .error-state {
+.loading-state, .error-state, .warning-state {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2957,6 +3047,21 @@ body {
   padding: 2rem;
   text-align: center;
   color: var(--text-secondary);
+}
+
+.warning-state {
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  border-radius: 8px;
+  color: #ffc107;
+}
+
+.selected-token-display {
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: var(--accent-blue);
 }
 
 .loading-state .spinner {

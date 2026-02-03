@@ -25,26 +25,20 @@ interface LogitLensData {
 }
 
 export function LogitLensView() {
-  const { inferenceResult } = useStore();
-  const [selectedPosition, setSelectedPosition] = useState<number | null>(null);
+  const { inferenceResult, selectedTokenIndex, setSelectedTokenIndex } = useStore();
   const [logitLensData, setLogitLensData] = useState<LogitLensData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [topK, setTopK] = useState(5);
 
-  // Set default to first output token
-  useEffect(() => {
-    if (inferenceResult?.tokens) {
-      const firstOutput = inferenceResult.tokens.find(t => !t.is_input);
-      if (firstOutput) {
-        setSelectedPosition(firstOutput.position);
-      }
-    }
-  }, [inferenceResult]);
+  // Use global selectedTokenIndex, default to first output token if not set
+  const selectedPosition = selectedTokenIndex !== null ? selectedTokenIndex : 
+    inferenceResult?.tokens.find(t => !t.is_input && t.position > 0)?.position ?? null;
 
   // Fetch logit lens data when position changes
   useEffect(() => {
-    if (selectedPosition === null || !inferenceResult?.has_layer_data) {
+    // Need position > 0 for logit lens (we analyze N-1 to predict N)
+    if (selectedPosition === null || selectedPosition === 0 || !inferenceResult?.has_layer_data) {
       setLogitLensData(null);
       return;
     }
@@ -96,20 +90,17 @@ export function LogitLensView() {
         <p className="subtitle">How token predictions evolve through layers</p>
       </div>
 
-      {/* Token selector */}
+      {/* Controls */}
       <div className="logit-lens-controls">
         <div className="control-group">
-          <label>Select output token to analyze:</label>
-          <select 
-            value={selectedPosition ?? ''}
-            onChange={(e) => setSelectedPosition(parseInt(e.target.value))}
-          >
-            {outputTokens.map((token, idx) => (
-              <option key={token.position} value={token.position}>
-                #{idx + 1}: "{token.text.replace(/\n/g, '↵').replace(/ /g, '·').slice(0, 15)}"
-              </option>
-            ))}
-          </select>
+          <label>Selected token:</label>
+          <span className="selected-token-display">
+            {selectedPosition !== null && inferenceResult.tokens[selectedPosition] ? (
+              <>#{selectedPosition}: "{inferenceResult.tokens[selectedPosition].text.replace(/\n/g, '↵').replace(/ /g, '·').slice(0, 20)}"</>
+            ) : (
+              'Click a token above to analyze'
+            )}
+          </span>
         </div>
         <div className="control-group">
           <label>Top-K:</label>
@@ -120,6 +111,12 @@ export function LogitLensView() {
           </select>
         </div>
       </div>
+      
+      {selectedPosition === 0 && (
+        <div className="warning-state">
+          <p>⚠️ Cannot analyze position 0 - select an output token (position &gt; 0)</p>
+        </div>
+      )}
 
       {loading && (
         <div className="loading-state">
