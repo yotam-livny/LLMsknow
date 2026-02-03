@@ -1,0 +1,17 @@
+# Dependencies
+frontend/node_modules/
+
+# Build outputs
+frontend/dist/
+
+# Python
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
