@@ -1105,6 +1105,11 @@ MODE 3: LIVE INFERENCE (any model, any input)
 ```
 
 ### DatasetInfo (available datasets)
+
+> **Implementation Note**: The `output_id` field maps to the naming used in output files 
+> (e.g., `movies` → `mistral-7b-instruct-answers-movies.csv`). This is different from 
+> the dataset `id` (e.g., `movie_qa_train`). See `VISUALIZATION_CODE_DESIGN.md` for details.
+
 ```json
 {
   "datasets": [
@@ -1112,6 +1117,7 @@ MODE 3: LIVE INFERENCE (any model, any input)
       "id": "movie_qa_train",
       "name": "Movie QA (Train)",
       "filename": "movie_qa_train.csv",
+      "output_id": "movies",
       "total_samples": 10001,
       "columns": ["Question", "Answer"],
       "category": "factual"
@@ -1120,6 +1126,7 @@ MODE 3: LIVE INFERENCE (any model, any input)
       "id": "movie_qa_test",
       "name": "Movie QA (Test)",
       "filename": "movie_qa_test.csv",
+      "output_id": "movies_test",
       "total_samples": 2000,
       "columns": ["Question", "Answer"],
       "category": "factual"
@@ -1128,6 +1135,7 @@ MODE 3: LIVE INFERENCE (any model, any input)
       "id": "answerable_math",
       "name": "Answerable Math",
       "filename": "AnswerableMath.csv",
+      "output_id": "math",
       "total_samples": 1952,
       "columns": ["question", "answer", "answerable", "category"],
       "category": "math"
@@ -1136,8 +1144,9 @@ MODE 3: LIVE INFERENCE (any model, any input)
       "id": "mnli_train",
       "name": "MNLI (Train)",
       "filename": "mnli_train.csv",
+      "output_id": "mnli",
       "total_samples": 5000,
-      "columns": ["premise", "hypothesis", "label"],
+      "columns": ["Question", "Answer", "Origin"],
       "category": "nli"
     }
     // ... other datasets

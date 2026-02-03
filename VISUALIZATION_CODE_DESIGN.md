@@ -150,26 +150,110 @@ SUPPORTED_MODELS = {
         "friendly_name": "llama-3-8b",
         "num_layers": 32,
         "num_heads": 32,
-        "hidden_size": 4096,
+        "hidden_size": 8192,  # NOTE: LLaMA-3-8B has 8192 hidden size, not 4096
     },
     "meta-llama/Meta-Llama-3-8B-Instruct": {
         "friendly_name": "llama-3-8b-instruct",
         "num_layers": 32,
         "num_heads": 32,
-        "hidden_size": 4096,
+        "hidden_size": 8192,  # NOTE: LLaMA-3-8B has 8192 hidden size, not 4096
     },
 }
 
 # Dataset configurations
+# IMPORTANT: "output_id" is the name used in output filenames (e.g., "movies" -> "mistral-7b-instruct-answers-movies.csv")
+# This is different from "filename" which is the raw data CSV name
 DATASET_CONFIG = {
     "movie_qa_train": {
         "filename": "movie_qa_train.csv",
+        "output_id": "movies",  # Used in output file naming by existing pipeline
         "display_name": "Movie QA (Train)",
         "question_col": "Question",
         "answer_col": "Answer",
         "category": "factual",
     },
-    # ... (all other datasets)
+    "movie_qa_test": {
+        "filename": "movie_qa_test.csv",
+        "output_id": "movies_test",
+        "display_name": "Movie QA (Test)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "category": "factual",
+    },
+    "answerable_math": {
+        "filename": "AnswerableMath.csv",
+        "output_id": "math",
+        "display_name": "Answerable Math",
+        "question_col": "question",  # NOTE: lowercase in this dataset
+        "answer_col": "answer",
+        "category": "math",
+    },
+    "answerable_math_test": {
+        "filename": "AnswerableMath_test.csv",
+        "output_id": "math_test",
+        "display_name": "Answerable Math (Test)",
+        "question_col": "question",
+        "answer_col": "answer",
+        "category": "math",
+    },
+    "mnli_train": {
+        "filename": "mnli_train.csv",
+        "output_id": "mnli",
+        "display_name": "MNLI (Train)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "category": "nli",
+    },
+    "mnli_validation": {
+        "filename": "mnli_validation.csv",
+        "output_id": "mnli_test",
+        "display_name": "MNLI (Validation)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "category": "nli",
+    },
+    "winogrande_train": {
+        "filename": "winogrande_train.csv",
+        "output_id": "winogrande",
+        "display_name": "Winogrande (Train)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "wrong_answer_col": "Wrong_Answer",  # Additional column for this dataset
+        "category": "commonsense",
+    },
+    "winogrande_test": {
+        "filename": "winogrande_test.csv",
+        "output_id": "winogrande_test",
+        "display_name": "Winogrande (Test)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "wrong_answer_col": "Wrong_Answer",
+        "category": "commonsense",
+    },
+    "winobias_dev": {
+        "filename": "winobias_dev.csv",
+        "output_id": "winobias",
+        "display_name": "WinoBias (Dev)",
+        "question_col": "sentence",  # NOTE: Different schema
+        "answer_col": "answer",
+        "category": "bias",
+    },
+    "winobias_test": {
+        "filename": "winobias_test.csv",
+        "output_id": "winobias_test",
+        "display_name": "WinoBias (Test)",
+        "question_col": "sentence",
+        "answer_col": "answer",
+        "category": "bias",
+    },
+    "nq_wc_dataset": {
+        "filename": "nq_wc_dataset.csv",
+        "output_id": "natural_questions_with_context",
+        "display_name": "Natural Questions (with Context)",
+        "question_col": "Question",
+        "answer_col": "Answer",
+        "category": "qa",
+    },
 }
 
 # Server settings
@@ -1877,24 +1961,31 @@ def get_available_combinations() -> List[Dict[str, Any]]:
     """
     Scan output/ and checkpoints/ to find all available model/dataset combinations.
     Returns list of combinations with their availability status.
+    
+    IMPORTANT: The existing pipeline uses "output_id" (e.g., "movies") in output filenames,
+    not "dataset_id" (e.g., "movie_qa_train"). This function maps between them.
     """
     combinations = []
     
     for model_id, model_config in SUPPORTED_MODELS.items():
         model_friendly = model_config["friendly_name"]
         
-        for dataset_id in DATASET_CONFIG.keys():
-            # Check for answers file
-            answers_file = OUTPUT_DIR / f"{model_friendly}-answers-{dataset_id}.csv"
+        for dataset_id, dataset_config in DATASET_CONFIG.items():
+            # IMPORTANT: Use output_id for matching output files, not dataset_id
+            output_id = dataset_config["output_id"]
+            
+            # Check for answers file (uses output_id)
+            answers_file = OUTPUT_DIR / f"{model_friendly}-answers-{output_id}.csv"
             has_answers = answers_file.exists()
             
-            # Check for input_output_ids file
-            ids_file = OUTPUT_DIR / f"{model_friendly}-input_output_ids-{dataset_id}.pt"
+            # Check for input_output_ids file (uses output_id)
+            ids_file = OUTPUT_DIR / f"{model_friendly}-input_output_ids-{output_id}.pt"
             has_ids = ids_file.exists()
             
-            # Check for probe checkpoint (any layer/token combination)
+            # Check for probe checkpoint (uses output_id, matching probe.py naming)
+            # Pattern: clf_{model_friendly}_{output_id}_layer-{N}_token-{type}.pkl
             probe_files = list(CHECKPOINTS_DIR.glob(
-                f"clf_{model_friendly}_{dataset_id}_layer-*_token-*.pkl"
+                f"clf_{model_friendly}_{output_id}_layer-*_token-*.pkl"
             ))
             has_probe = len(probe_files) > 0
             
@@ -2124,6 +2215,15 @@ class DatasetManager:
 ```python
 """
 Extract and process attention patterns from model forward pass.
+
+NOTE: This uses model's native `output_attentions=True` parameter rather than
+baukit's TraceDict (used in probing_utils.py for layer representation extraction).
+This is intentional: we need raw attention weights (softmax outputs), not the
+projected outputs traced by probing_utils.
+
+The two approaches are complementary:
+- probing_utils.py TraceDict: Extracts layer outputs/hidden states for probing
+- AttentionExtractor: Extracts raw attention patterns for visualization
 """
 import torch
 import numpy as np
