@@ -76,7 +76,120 @@ class ModelSummary(BaseModel):
     has_any_data: bool
 
 
+# Inference request/response schemas
+class InferenceRequest(BaseModel):
+    """Request for model inference."""
+    model_id: str = Field(..., description="HuggingFace model ID")
+    question: str = Field(..., description="Input question/prompt")
+    expected_answer: Optional[str] = Field(None, description="Expected answer for correctness check")
+    dataset_id: Optional[str] = Field(None, description="Source dataset (for metadata)")
+    sample_idx: Optional[int] = Field(None, description="Sample index in dataset")
+    max_new_tokens: int = Field(100, description="Maximum tokens to generate")
+    extract_layers: bool = Field(True, description="Whether to extract layer representations")
+    extract_attention: bool = Field(True, description="Whether to extract attention patterns")
+
+
+class TokenInfo(BaseModel):
+    """Information about a single token."""
+    id: int
+    text: str
+    position: int
+    is_input: bool = True
+
+
+class LayerStats(BaseModel):
+    """Statistics for a single layer."""
+    mean: float
+    std: float
+    min: float
+    max: float
+    norm: float
+
+
+class AttentionHeadStats(BaseModel):
+    """Statistics for an attention head."""
+    entropy: float
+    sparsity: float
+    max_attention: float
+    mean_self_attention: float
+
+
+class ProbePrediction(BaseModel):
+    """Prediction from a trained probe."""
+    layer: int
+    token: str
+    prediction: int  # 0 = correct, 1 = incorrect
+    confidence: float
+    probabilities: List[float]
+
+
+class InferenceResponse(BaseModel):
+    """Full inference result with optional extractions."""
+    # Basic info
+    model_id: str
+    question: str
+    generated_answer: str
+    expected_answer: Optional[str] = None
+    
+    # Token information
+    tokens: List[TokenInfo]
+    input_token_count: int
+    output_token_count: int
+    total_token_count: int
+    
+    # Correctness info
+    actual_correct: Optional[bool] = None  # Objective correctness if expected_answer provided
+    
+    # Probe predictions (if available)
+    probe_predictions: Optional[Dict[int, ProbePrediction]] = None
+    probe_available: bool = False
+    
+    # Extraction flags
+    has_layer_data: bool = False
+    has_attention_data: bool = False
+
+
+class LayerDataResponse(BaseModel):
+    """Layer representations for visualization."""
+    model_id: str
+    layers: Dict[int, List[List[float]]]  # layer_idx -> (seq_len, hidden_size)
+    layer_stats: Dict[int, LayerStats]
+    seq_len: int
+    num_layers: int
+    hidden_size: int
+
+
+class AttentionDataResponse(BaseModel):
+    """Attention patterns for visualization."""
+    model_id: str
+    patterns: Dict[int, Dict[int, List[List[float]]]]  # layer -> head -> (seq_len, seq_len)
+    statistics: Dict[int, Dict[int, AttentionHeadStats]]
+    seq_len: int
+    num_layers: int
+    num_heads: int
+
+
+class ModelLoadRequest(BaseModel):
+    """Request to load a model."""
+    model_id: str
+    use_quantization: bool = False
+
+
+class ModelStatusResponse(BaseModel):
+    """Current model status."""
+    loaded: bool
+    model_id: Optional[str] = None
+    device: str
+    
+    
 # Health check
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
+
+
+# Error response
+class ErrorResponse(BaseModel):
+    error: str
+    detail: Optional[str] = None
+    code: Optional[str] = None

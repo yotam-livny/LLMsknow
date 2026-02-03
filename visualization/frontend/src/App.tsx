@@ -3,12 +3,14 @@ import { ModelSelector } from './components/ModelSelector';
 import { DatasetSelector } from './components/DatasetSelector';
 import { SampleBrowser } from './components/SampleBrowser';
 import { CombinationDetails } from './components/CombinationDetails';
+import { InferencePanel } from './components/InferencePanel';
+import { VisualizationPanel } from './components/VisualizationPanel';
 import { useStore } from './store/useStore';
 import api from './api/client';
 import './App.css';
 
 function App() {
-  const { isLoading, error, setError } = useStore();
+  const { isLoading, error, setError, inferenceRunning } = useStore();
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
@@ -62,28 +64,35 @@ function App() {
         </div>
       )}
 
-      {isLoading && (
+      {(isLoading || inferenceRunning) && (
         <div className="loading-overlay">
           <div className="spinner"></div>
+          {inferenceRunning && <p>Running inference...</p>}
         </div>
       )}
 
       <main className="app-main">
-        <div className="left-panel">
+        <div className="selection-panel">
           <section className="panel">
             <ModelSelector />
           </section>
           <section className="panel">
             <DatasetSelector />
           </section>
-        </div>
-        
-        <div className="right-panel">
           <section className="panel">
             <CombinationDetails />
           </section>
-          <section className="panel">
+          <section className="panel sample-panel">
             <SampleBrowser />
+          </section>
+        </div>
+        
+        <div className="work-panel">
+          <section className="panel inference-section">
+            <InferencePanel />
+          </section>
+          <section className="panel visualization-section">
+            <VisualizationPanel />
           </section>
         </div>
       </main>

@@ -16,7 +16,10 @@ from config import API_HOST, API_PORT, CORS_ORIGINS, SUPPORTED_MODELS
 from utils.logging import get_logger
 from api.schemas import (
     DatasetInfo, DatasetSample, DatasetSampleFull,
-    DatasetSamplesResponse, CombinationInfo, ModelSummary, HealthResponse
+    DatasetSamplesResponse, CombinationInfo, ModelSummary, HealthResponse,
+    InferenceRequest, InferenceResponse, TokenInfo, LayerStats,
+    LayerDataResponse, AttentionDataResponse, AttentionHeadStats,
+    ModelLoadRequest, ModelStatusResponse, ProbePrediction, ErrorResponse
 )
 from core.dataset_manager import (
     list_datasets, get_dataset_info, get_dataset_samples, get_sample_by_index
@@ -25,6 +28,17 @@ from core.availability_scanner import (
     get_available_combinations, get_ready_combinations,
     get_combinations_for_model, get_models_summary
 )
+from core.model_manager import ModelManager
+from core.layer_extractor import LayerExtractor
+from core.attention_extractor import AttentionExtractor
+from core.probe_runner import ProbeRunner, get_probe_info
+
+# Global storage for current inference session
+_current_session = {
+    "inference_result": None,
+    "layer_data": None,
+    "attention_data": None,
+}
 
 logger = get_logger("api")
 
@@ -133,6 +147,238 @@ async def get_sample(dataset_id: str, index: int):
         return get_sample_by_index(dataset_id, index)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# Model management endpoints
+@app.get("/api/model/status", response_model=ModelStatusResponse, tags=["Model"])
+async def get_model_status():
+    """Get current model loading status."""
+    mm = ModelManager()
+    return ModelStatusResponse(
+        loaded=mm._current_model_id is not None,
+        model_id=mm._current_model_id,
+        device=mm.get_device()
+    )
+
+
+@app.post("/api/model/load", response_model=ModelStatusResponse, tags=["Model"])
+async def load_model(request: ModelLoadRequest):
+    """Load a model onto the GPU/device."""
+    try:
+        logger.info(f"Loading model: {request.model_id}")
+        mm = ModelManager()
+        mm.load_model(request.model_id, request.use_quantization)
+        return ModelStatusResponse(
+            loaded=True,
+            model_id=request.model_id,
+            device=mm.get_device()
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+
+
+@app.post("/api/model/unload", response_model=ModelStatusResponse, tags=["Model"])
+async def unload_model():
+    """Unload the current model to free memory."""
+    mm = ModelManager()
+    mm.unload_model()
+    return ModelStatusResponse(
+        loaded=False,
+        model_id=None,
+        device=mm.get_device()
+    )
+
+
+# Inference endpoints
+@app.post("/api/inference", response_model=InferenceResponse, tags=["Inference"])
+async def run_inference(request: InferenceRequest):
+    """
+    Run model inference and optionally extract layer representations and attention.
+    """
+    global _current_session
+    
+    logger.info(f"Starting inference with model={request.model_id}")
+    
+    mm = ModelManager()
+    
+    # Load model if not already loaded
+    if not mm.is_model_loaded(request.model_id):
+        logger.info(f"Model {request.model_id} not loaded, loading now...")
+        try:
+            mm.load_model(request.model_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+    
+    try:
+        model, tokenizer = mm.get_model_and_tokenizer()
+        
+        # Tokenize input
+        input_ids = mm.tokenize(request.question)
+        input_length = input_ids.shape[1]
+        
+        # Generate response
+        output = mm.generate(
+            input_ids,
+            max_new_tokens=request.max_new_tokens,
+            output_attentions=request.extract_attention,
+            output_hidden_states=request.extract_layers
+        )
+        
+        # Get generated sequence
+        generated_ids = output.sequences[0]
+        generated_answer = mm.decode(generated_ids[input_length:])
+        
+        # Build token info
+        tokens = []
+        for i, token_id in enumerate(generated_ids.tolist()):
+            token_text = tokenizer.decode([token_id])
+            tokens.append(TokenInfo(
+                id=token_id,
+                text=token_text,
+                position=i,
+                is_input=(i < input_length)
+            ))
+        
+        total_length = len(generated_ids)
+        output_length = total_length - input_length
+        
+        # Extract layer representations if requested
+        layer_data = None
+        layer_stats = {}
+        if request.extract_layers:
+            logger.debug("Extracting layer representations...")
+            extractor = LayerExtractor(model, request.model_id)
+            layer_result = extractor.extract_all_layers(generated_ids.unsqueeze(0))
+            layer_stats = extractor.compute_layer_statistics(
+                {k: layer_result["layers"][k] for k in layer_result["layers"]}
+            )
+            layer_data = {
+                "model_id": request.model_id,
+                "layers": layer_result["layers"],
+                "layer_stats": {k: LayerStats(**v) for k, v in layer_stats.items()},
+                "seq_len": layer_result["seq_len"],
+                "num_layers": SUPPORTED_MODELS[request.model_id]["num_layers"],
+                "hidden_size": SUPPORTED_MODELS[request.model_id]["hidden_size"]
+            }
+            _current_session["layer_data"] = layer_data
+        
+        # Extract attention if requested
+        attention_data = None
+        if request.extract_attention:
+            logger.debug("Extracting attention patterns...")
+            attn_extractor = AttentionExtractor(model, request.model_id)
+            attn_result = attn_extractor.extract_attention_patterns(generated_ids.unsqueeze(0))
+            attention_data = {
+                "model_id": request.model_id,
+                "patterns": attn_result["patterns"],
+                "statistics": {
+                    layer_idx: {
+                        head_idx: AttentionHeadStats(**head_stats)
+                        for head_idx, head_stats in heads.items()
+                    }
+                    for layer_idx, heads in attn_result["statistics"].items()
+                },
+                "seq_len": attn_result["seq_len"],
+                "num_layers": SUPPORTED_MODELS[request.model_id]["num_layers"],
+                "num_heads": SUPPORTED_MODELS[request.model_id]["num_heads"]
+            }
+            _current_session["attention_data"] = attention_data
+        
+        # Check actual correctness if expected answer provided
+        actual_correct = None
+        if request.expected_answer:
+            # Simple substring match for now
+            actual_correct = request.expected_answer.lower().strip() in generated_answer.lower()
+        
+        # Try to run probe predictions if available
+        probe_predictions = None
+        probe_available = False
+        if request.dataset_id and layer_data:
+            try:
+                probe_info = get_probe_info(request.model_id, request.dataset_id)
+                if probe_info["available"]:
+                    probe_available = True
+                    runner = ProbeRunner(request.model_id, request.dataset_id)
+                    probes = runner.list_available_probes()
+                    
+                    # Use the last input token for predictions (common choice)
+                    token_idx = input_length - 1
+                    
+                    # Get predictions from all available probes
+                    import numpy as np
+                    probe_predictions = {}
+                    for probe in probes:
+                        try:
+                            layer_idx = probe["layer"]
+                            layer_rep = np.array(layer_data["layers"][layer_idx])
+                            token_rep = layer_rep[token_idx]
+                            pred = runner.predict(token_rep, layer_idx, probe["token"])
+                            probe_predictions[layer_idx] = ProbePrediction(**pred)
+                        except Exception as e:
+                            logger.warning(f"Failed probe at layer {probe['layer']}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to run probes: {e}")
+        
+        # Build response
+        response = InferenceResponse(
+            model_id=request.model_id,
+            question=request.question,
+            generated_answer=generated_answer,
+            expected_answer=request.expected_answer,
+            tokens=tokens,
+            input_token_count=input_length,
+            output_token_count=output_length,
+            total_token_count=total_length,
+            actual_correct=actual_correct,
+            probe_predictions=probe_predictions,
+            probe_available=probe_available,
+            has_layer_data=(layer_data is not None),
+            has_attention_data=(attention_data is not None)
+        )
+        
+        _current_session["inference_result"] = response
+        
+        logger.info(f"Inference complete: {output_length} tokens generated")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Inference failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+
+
+@app.get("/api/inference/layers", response_model=LayerDataResponse, tags=["Inference"])
+async def get_layer_data():
+    """Get layer representations from the last inference."""
+    if _current_session["layer_data"] is None:
+        raise HTTPException(
+            status_code=404, 
+            detail="No layer data available. Run inference with extract_layers=true first."
+        )
+    return LayerDataResponse(**_current_session["layer_data"])
+
+
+@app.get("/api/inference/attention", response_model=AttentionDataResponse, tags=["Inference"])
+async def get_attention_data():
+    """Get attention patterns from the last inference."""
+    if _current_session["attention_data"] is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No attention data available. Run inference with extract_attention=true first."
+        )
+    return AttentionDataResponse(**_current_session["attention_data"])
+
+
+# Probe endpoints
+@app.get("/api/probes/{model_id}/{dataset_id}", tags=["Probes"])
+async def get_probes(model_id: str, dataset_id: str):
+    """Get information about available probes for a model/dataset combination."""
+    if model_id not in SUPPORTED_MODELS:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+    
+    return get_probe_info(model_id, dataset_id)
 
 
 # Main entry point

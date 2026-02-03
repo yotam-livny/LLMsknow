@@ -76,6 +76,89 @@ export interface DatasetSamplesResponse {
   has_prev: boolean;
 }
 
+// Model status
+export interface ModelStatus {
+  loaded: boolean;
+  model_id: string | null;
+  device: string;
+}
+
+// Inference types
+export interface TokenInfo {
+  id: number;
+  text: string;
+  position: number;
+  is_input: boolean;
+}
+
+export interface ProbePrediction {
+  layer: number;
+  token: string;
+  prediction: number;
+  confidence: number;
+  probabilities: number[];
+}
+
+export interface InferenceRequest {
+  model_id: string;
+  question: string;
+  expected_answer?: string;
+  dataset_id?: string;
+  sample_idx?: number;
+  max_new_tokens?: number;
+  extract_layers?: boolean;
+  extract_attention?: boolean;
+}
+
+export interface InferenceResponse {
+  model_id: string;
+  question: string;
+  generated_answer: string;
+  expected_answer: string | null;
+  tokens: TokenInfo[];
+  input_token_count: number;
+  output_token_count: number;
+  total_token_count: number;
+  actual_correct: boolean | null;
+  probe_predictions: Record<number, ProbePrediction> | null;
+  probe_available: boolean;
+  has_layer_data: boolean;
+  has_attention_data: boolean;
+}
+
+export interface LayerStats {
+  mean: number;
+  std: number;
+  min: number;
+  max: number;
+  norm: number;
+}
+
+export interface LayerDataResponse {
+  model_id: string;
+  layers: Record<number, number[][]>;
+  layer_stats: Record<number, LayerStats>;
+  seq_len: number;
+  num_layers: number;
+  hidden_size: number;
+}
+
+export interface AttentionHeadStats {
+  entropy: number;
+  sparsity: number;
+  max_attention: number;
+  mean_self_attention: number;
+}
+
+export interface AttentionDataResponse {
+  model_id: string;
+  patterns: Record<number, Record<number, number[][]>>;
+  statistics: Record<number, Record<number, AttentionHeadStats>>;
+  seq_len: number;
+  num_layers: number;
+  num_heads: number;
+}
+
 // API functions
 export const api = {
   // Health
@@ -98,6 +181,18 @@ export const api = {
     apiClient.get<DatasetSamplesResponse>(`/datasets/${datasetId}/samples`, { params }),
   getSample: (datasetId: string, index: number) =>
     apiClient.get<DatasetSample>(`/datasets/${datasetId}/samples/${index}`),
+  
+  // Model management
+  getModelStatus: () => apiClient.get<ModelStatus>('/model/status'),
+  loadModel: (modelId: string, useQuantization = false) =>
+    apiClient.post<ModelStatus>('/model/load', { model_id: modelId, use_quantization: useQuantization }),
+  unloadModel: () => apiClient.post<ModelStatus>('/model/unload'),
+  
+  // Inference
+  runInference: (request: InferenceRequest) =>
+    apiClient.post<InferenceResponse>('/inference', request, { timeout: 300000 }), // 5 min timeout for inference
+  getLayerData: () => apiClient.get<LayerDataResponse>('/inference/layers'),
+  getAttentionData: () => apiClient.get<AttentionDataResponse>('/inference/attention'),
 };
 
 export default api;
