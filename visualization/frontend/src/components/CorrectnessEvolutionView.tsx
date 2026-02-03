@@ -306,6 +306,36 @@ export function CorrectnessEvolutionView() {
     );
   }
 
+  // Get probe prediction info for consolidated panel
+  const getProbeInfoInput = () => {
+    if (!inferenceResult?.probe_predictions) return null;
+    const entries = Object.entries(inferenceResult.probe_predictions);
+    if (entries.length === 0) return null;
+    const [layer, pred] = entries[entries.length - 1];
+    return {
+      layer: parseInt(layer),
+      pCorrect: pred.probabilities[0],
+      isCorrect: pred.probabilities[0] > 0.5,
+      tokenPos: inferenceResult.input_token_count - 1
+    };
+  };
+
+  const getProbeInfoOutput = () => {
+    if (!inferenceResult?.probe_predictions_output) return null;
+    const entries = Object.entries(inferenceResult.probe_predictions_output);
+    if (entries.length === 0) return null;
+    const [layer, pred] = entries[entries.length - 1];
+    return {
+      layer: parseInt(layer),
+      pCorrect: pred.probabilities[0],
+      isCorrect: pred.probabilities[0] > 0.5,
+      tokenPos: inferenceResult.total_token_count - 1
+    };
+  };
+
+  const probeInfoInput = getProbeInfoInput();
+  const probeInfoOutput = getProbeInfoOutput();
+
   return (
     <div className="correctness-evolution-view">
       <div className="view-header">
@@ -313,6 +343,65 @@ export function CorrectnessEvolutionView() {
         <p className="subtitle">
           How the model's internal "belief" about correctness evolves across layers
         </p>
+      </div>
+
+      {/* Consolidated Correctness Panel - At Top */}
+      <div className="correctness-panel-consolidated">
+        <div className="correctness-row probe-row">
+          <div className="correctness-item">
+            <span className="label">🧠 Before Generation:</span>
+            {probeInfoInput ? (
+              <span className={`value ${probeInfoInput.isCorrect ? 'correct' : 'incorrect'}`}>
+                {probeInfoInput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                <span className="detail">({(probeInfoInput.pCorrect * 100).toFixed(1)}% at L{probeInfoInput.layer}, tok {probeInfoInput.tokenPos})</span>
+              </span>
+            ) : (
+              <span className="value unknown">No probe</span>
+            )}
+          </div>
+          
+          <div className="correctness-item">
+            <span className="label">🧠 After Generation:</span>
+            {probeInfoOutput ? (
+              <span className={`value ${probeInfoOutput.isCorrect ? 'correct' : 'incorrect'}`}>
+                {probeInfoOutput.isCorrect ? '✓ Correct' : '✗ Incorrect'}
+                <span className="detail">({(probeInfoOutput.pCorrect * 100).toFixed(1)}% at L{probeInfoOutput.layer}, tok {probeInfoOutput.tokenPos})</span>
+              </span>
+            ) : (
+              <span className="value unknown">No probe</span>
+            )}
+          </div>
+        </div>
+
+        <div className="correctness-row ground-truth-row">
+          <div className="correctness-item">
+            <span className="label">📋 Ground Truth:</span>
+            {inferenceResult?.actual_correct !== null ? (
+              <span className={`value ${inferenceResult.actual_correct ? 'correct' : 'incorrect'}`}>
+                {inferenceResult.actual_correct ? '✓ Correct' : '✗ Incorrect'}
+              </span>
+            ) : (
+              <span className="value unknown">Unknown</span>
+            )}
+          </div>
+          
+          {inferenceResult?.expected_answer && (
+            <div className="correctness-item">
+              <span className="label">Expected:</span>
+              <span className="value expected">{inferenceResult.expected_answer}</span>
+            </div>
+          )}
+        </div>
+
+        {probeInfoOutput && inferenceResult?.actual_correct !== null && (
+          <div className={`calibration-row ${probeInfoOutput.isCorrect === inferenceResult.actual_correct ? 'match' : 'mismatch'}`}>
+            {probeInfoOutput.isCorrect === inferenceResult.actual_correct ? (
+              <>✓ Model's final self-assessment matches reality</>
+            ) : (
+              <>⚠ Model is miscalibrated (final assessment differs from reality)</>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Exact Answer Section */}

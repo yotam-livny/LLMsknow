@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { AttentionView } from './AttentionView';
-import { AlternativesView } from './AlternativesView';
 import { CorrectnessEvolutionView } from './CorrectnessEvolutionView';
+import { LogitLensView } from './LogitLensView';
 
-type ViewTab = 'attention' | 'alternatives' | 'correctness';
+type ViewTab = 'attention' | 'correctness' | 'logitlens';
 
 export function VisualizationPanel() {
   const [activeTab, setActiveTab] = useState<ViewTab>('attention');
@@ -14,7 +14,6 @@ export function VisualizationPanel() {
   } = useStore();
 
   const hasData = inferenceResult && attentionData;
-  const hasAlternatives = inferenceResult?.token_alternatives && inferenceResult.token_alternatives.length > 0;
   const hasLayerData = inferenceResult?.has_layer_data;
 
   return (
@@ -31,12 +30,12 @@ export function VisualizationPanel() {
               🔍 Attention
             </button>
             <button 
-              className={activeTab === 'alternatives' ? 'active' : ''}
-              onClick={() => setActiveTab('alternatives')}
-              disabled={!hasAlternatives}
-              title={hasAlternatives ? 'View token alternatives' : 'Restart backend to enable'}
+              className={activeTab === 'logitlens' ? 'active' : ''}
+              onClick={() => setActiveTab('logitlens')}
+              disabled={!hasLayerData}
+              title={hasLayerData ? 'View how token predictions evolve through layers' : 'Run inference with layer extraction'}
             >
-              🎯 Alternatives
+              🔬 Logit Lens
             </button>
             <button 
               className={activeTab === 'correctness' ? 'active' : ''}
@@ -66,7 +65,7 @@ export function VisualizationPanel() {
         ) : (
           <>
             {activeTab === 'attention' && <AttentionView />}
-            {activeTab === 'alternatives' && <AlternativesView />}
+            {activeTab === 'logitlens' && <LogitLensView />}
             {activeTab === 'correctness' && <CorrectnessEvolutionView />}
           </>
         )}

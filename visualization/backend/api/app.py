@@ -21,7 +21,8 @@ from api.schemas import (
     LayerDataResponse, AttentionDataResponse, AttentionHeadStats,
     ModelLoadRequest, ModelStatusResponse, ProbePrediction, ErrorResponse,
     CorrectnessEvolutionRequest, CorrectnessEvolutionResponse,
-    ExactAnswerInfo, LayerProbeResult
+    ExactAnswerInfo, LayerProbeResult,
+    LogitLensRequest, LogitLensResponse, LogitLensLayerResult, LogitLensToken
 )
 from core.dataset_manager import (
     list_datasets, get_dataset_info, get_dataset_samples, get_sample_by_index
@@ -598,6 +599,141 @@ async def get_correctness_evolution(request: CorrectnessEvolutionRequest):
     except Exception as e:
         logger.error(f"Correctness evolution failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Correctness evolution failed: {str(e)}")
+
+
+@app.post("/api/inference/logit-lens", response_model=LogitLensResponse, tags=["Inference"])
+async def get_logit_lens(request: LogitLensRequest):
+    """
+    Analyze how token predictions evolve through layers (Logit Lens).
+    
+    For a given output token position, shows what tokens the model would predict
+    if we took the hidden state at the PREVIOUS position and projected it to vocabulary space.
+    This reveals how the model "builds up" to its final prediction.
+    
+    Key insight: To predict token at position N, the model uses hidden state at position N-1.
+    
+    Note: This runs a fresh forward pass to get accurate hidden states (the cached
+    layer data from generate() has a different structure that doesn't work correctly).
+    """
+    global _current_session
+    
+    logger.info(f"Computing logit lens for token position {request.token_position}")
+    
+    inference_result = _current_session.get("inference_result")
+    
+    if not inference_result:
+        raise HTTPException(
+            status_code=400,
+            detail="No inference data available. Run /api/inference first."
+        )
+    
+    mm = ModelManager()
+    if not mm._current_model_id:
+        raise HTTPException(status_code=400, detail="No model loaded")
+    
+    # Validate token position (must be > 0 because we need previous position)
+    if request.token_position <= 0 or request.token_position >= len(inference_result.tokens):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid token position. Must be 1-{len(inference_result.tokens)-1} (need previous token for prediction)"
+        )
+    
+    target_token = inference_result.tokens[request.token_position]
+    # To predict token at position N, we analyze hidden state at position N-1
+    prediction_position = request.token_position - 1
+    previous_token = inference_result.tokens[prediction_position]
+    
+    logger.info(f"Analyzing hidden state at position {prediction_position} ('{previous_token.text}') to predict token '{target_token.text}'")
+    
+    try:
+        import torch
+        import torch.nn.functional as F
+        import numpy as np
+        
+        model, tokenizer = mm.get_model_and_tokenizer()
+        device = next(model.parameters()).device
+        
+        # Reconstruct the full token sequence from inference result
+        token_ids = [t.id for t in inference_result.tokens]
+        input_ids = torch.tensor([token_ids], device=device)
+        
+        logger.info(f"Running forward pass on {len(token_ids)} tokens to extract hidden states")
+        
+        # Run a FRESH forward pass to get accurate hidden states at all layers
+        with torch.no_grad():
+            outputs = model(
+                input_ids,
+                output_hidden_states=True,
+                return_dict=True
+            )
+        
+        # outputs.hidden_states is a tuple: (embedding_output, layer_0_output, layer_1_output, ..., layer_N_output)
+        # Each has shape (batch, seq_len, hidden_size)
+        hidden_states = outputs.hidden_states
+        num_layers = len(hidden_states) - 1  # Exclude embedding layer
+        
+        # Get the LM head (final projection to vocabulary)
+        lm_head = model.lm_head
+        
+        layer_results = []
+        
+        for layer_idx in range(num_layers):
+            # hidden_states[0] is embeddings, hidden_states[1] is layer 0 output, etc.
+            layer_hidden = hidden_states[layer_idx + 1]  # +1 to skip embeddings
+            
+            # Get hidden state at prediction position
+            hidden_state = layer_hidden[0, prediction_position, :]  # (hidden_size,)
+            
+            # Apply final layer norm (required before LM head)
+            # Only the final layer's hidden states have already been normed
+            if hasattr(model, 'model') and hasattr(model.model, 'norm'):
+                normed_hidden = model.model.norm(hidden_state.unsqueeze(0)).squeeze(0)
+            else:
+                normed_hidden = hidden_state
+            
+            # Apply LM head to get logits
+            logits = lm_head(normed_hidden)
+            probs = F.softmax(logits, dim=-1)
+            
+            # Get top-k predictions
+            top_probs, top_indices = torch.topk(probs, request.top_k)
+            
+            top_tokens = []
+            for prob, idx in zip(top_probs.tolist(), top_indices.tolist()):
+                token_text = tokenizer.decode([idx])
+                top_tokens.append(LogitLensToken(
+                    token_id=idx,
+                    token_text=token_text,
+                    probability=prob
+                ))
+            
+            # Find rank and prob of the actual target token
+            target_prob = probs[target_token.id].item()
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+            target_rank = (sorted_indices == target_token.id).nonzero(as_tuple=True)[0]
+            target_rank = target_rank[0].item() + 1 if len(target_rank) > 0 else None
+            
+            layer_results.append(LogitLensLayerResult(
+                layer=layer_idx,
+                top_tokens=top_tokens,
+                target_token_rank=target_rank,
+                target_token_prob=target_prob
+            ))
+        
+        logger.info(f"Logit lens computed for {len(layer_results)} layers")
+        
+        return LogitLensResponse(
+            token_position=request.token_position,
+            token_text=target_token.text,
+            token_id=target_token.id,
+            prediction_position=prediction_position,
+            prediction_token_text=previous_token.text,
+            layers=layer_results
+        )
+        
+    except Exception as e:
+        logger.error(f"Logit lens failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Logit lens failed: {str(e)}")
 
 
 def _generate_interpretation(

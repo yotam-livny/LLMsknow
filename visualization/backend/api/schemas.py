@@ -249,6 +249,37 @@ class CorrectnessEvolutionResponse(BaseModel):
     interpretation: str = ""
 
 
+class LogitLensToken(BaseModel):
+    """A token prediction from logit lens."""
+    token_id: int
+    token_text: str
+    probability: float
+
+
+class LogitLensLayerResult(BaseModel):
+    """Logit lens result for a single layer."""
+    layer: int
+    top_tokens: List[LogitLensToken]
+    target_token_rank: Optional[int] = None  # Rank of the actual generated token
+    target_token_prob: Optional[float] = None  # Probability of actual token
+
+
+class LogitLensResponse(BaseModel):
+    """Response for logit lens analysis."""
+    token_position: int  # Position of the token being predicted
+    token_text: str  # Text of the token being predicted
+    token_id: int  # ID of the token being predicted
+    prediction_position: int  # Position of hidden state used for prediction (token_position - 1)
+    prediction_token_text: str  # Token at prediction position
+    layers: List[LogitLensLayerResult]
+
+
+class LogitLensRequest(BaseModel):
+    """Request for logit lens analysis."""
+    token_position: int
+    top_k: int = 5
+
+
 class CorrectnessEvolutionRequest(BaseModel):
     """Request for correctness evolution analysis."""
     # Can use existing inference result or provide new question

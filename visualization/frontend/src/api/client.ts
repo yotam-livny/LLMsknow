@@ -166,6 +166,32 @@ export interface AttentionDataResponse {
   num_heads: number;
 }
 
+// Logit Lens types
+export interface LogitLensToken {
+  token_id: number;
+  token_text: string;
+  probability: number;
+}
+
+export interface LogitLensLayerResult {
+  layer: number;
+  top_tokens: LogitLensToken[];
+  target_token_rank: number | null;
+  target_token_prob: number | null;
+}
+
+export interface LogitLensRequest {
+  token_position: number;
+  top_k?: number;
+}
+
+export interface LogitLensResponse {
+  token_position: number;
+  token_text: string;
+  token_id: number;
+  layers: LogitLensLayerResult[];
+}
+
 // API functions
 export const api = {
   // Health
@@ -200,6 +226,8 @@ export const api = {
     apiClient.post<InferenceResponse>('/inference', request, { timeout: 300000 }), // 5 min timeout for inference
   getLayerData: () => apiClient.get<LayerDataResponse>('/inference/layers'),
   getAttentionData: () => apiClient.get<AttentionDataResponse>('/inference/attention'),
+  getLogitLens: (request: LogitLensRequest) =>
+    apiClient.post<LogitLensResponse>('/inference/logit-lens', request),
 };
 
 export default api;
