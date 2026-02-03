@@ -467,7 +467,14 @@ def main():
     dataset_size = args.n_samples
 
     model, tokenizer = load_model_and_validate_gpu(args.model)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Determine device for tensor operations
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    print(f"Using device: {device}")
 
     stop_token_id = None
     if 'instruct' not in args.model.lower():

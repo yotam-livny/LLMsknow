@@ -267,7 +267,10 @@ def compute_correctness(all_questions, dataset_name, model_name, labels, model, 
             del model
             del tokenizer
             gc.collect()
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif torch.backends.mps.is_available():
+                torch.mps.empty_cache()
             res = compute_correctness_natual_questions(all_questions, model_answers, labels)
     elif 'winogrande' in dataset_name:
         res = compute_correctness_winogrande(model_answers, labels, wrong_labels, model_name=model_name)

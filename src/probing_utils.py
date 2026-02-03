@@ -96,15 +96,23 @@ def encode(prompt, tokenizer, model_name):
 
 
 def tokenize(prompt, tokenizer, model_name, tokenizer_args=None):
+    # Determine device
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif torch.backends.mps.is_available():
+        device = 'mps'
+    else:
+        device = 'cpu'
+    
     if 'instruct' in model_name.lower():
         messages = [
             {"role": "user", "content": prompt}
         ]
-        model_input = tokenizer.apply_chat_template(messages, return_tensors="pt", **(tokenizer_args or {})).to('cuda')
+        model_input = tokenizer.apply_chat_template(messages, return_tensors="pt", **(tokenizer_args or {})).to(device)
     else: # non instruct model
         model_input = tokenizer(prompt, return_tensors='pt', **(tokenizer_args or {}))
         if "input_ids" in model_input:
-            model_input = model_input["input_ids"].to('cuda')
+            model_input = model_input["input_ids"].to(device)
     return model_input
 
 
@@ -301,14 +309,68 @@ def extract_internal_reps_all_layers_and_tokens(model, input_output_ids_lst, pro
     return all_outputs_per_layer
 
 
-def load_model_and_validate_gpu(model_path, tokenizer_path=None):
+def load_model_and_validate_gpu(model_path, tokenizer_path=None, use_quantization=False):
+    """
+    Load model with support for CUDA, MPS (Apple Silicon), and CPU.
+    
+    Args:
+        model_path: Path to the model
+        tokenizer_path: Path to tokenizer (defaults to model_path)
+        use_quantization: If True, use 4-bit quantization (requires bitsandbytes)
+    """
     if tokenizer_path is None:
         tokenizer_path = model_path
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     print("Started loading model")
-    model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto',
-                                                 torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
-    assert ('cpu' not in model.hf_device_map.values())
+    
+    # Detect available device
+    if torch.cuda.is_available():
+        device_map = 'auto'
+        print("Using CUDA")
+    elif torch.backends.mps.is_available():
+        device_map = None  # Will manually move to MPS
+        print("Using MPS (Apple Silicon)")
+    else:
+        device_map = None
+        print("Using CPU")
+    
+    # Load model with appropriate settings
+    load_kwargs = {
+        'torch_dtype': torch.bfloat16,
+        'low_cpu_mem_usage': True,
+    }
+    
+    if use_quantization:
+        try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            load_kwargs['quantization_config'] = quantization_config
+            print("Using 4-bit quantization")
+        except ImportError:
+            print("Warning: bitsandbytes not available, loading without quantization")
+            use_quantization = False
+    
+    if device_map == 'auto':
+        load_kwargs['device_map'] = 'auto'
+        model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+        # Only assert if using CUDA
+        if torch.cuda.is_available():
+            assert ('cpu' not in model.hf_device_map.values()), "Model should be on GPU, not CPU"
+    else:
+        # For MPS or CPU, load without device_map and move manually
+        model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+        if torch.backends.mps.is_available():
+            model = model.to('mps')
+            print("Model moved to MPS")
+        else:
+            model = model.to('cpu')
+            print("Model moved to CPU")
+    
     return model, tokenizer
 
 
