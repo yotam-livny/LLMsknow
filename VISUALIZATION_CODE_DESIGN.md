@@ -19,6 +19,74 @@
 
 ---
 
+## ⚠️ Critical Implementation Notes
+
+**Read these before starting implementation.** These address potential pitfalls identified during design review.
+
+### 1. Dataset ID vs Output ID (IMPORTANT!)
+
+The existing pipeline uses different naming in output files vs raw data files:
+
+| Raw Data File | Output ID (in filenames) | Dataset Config ID |
+|---------------|--------------------------|-------------------|
+| `movie_qa_train.csv` | `movies` | `movie_qa_train` |
+| `AnswerableMath.csv` | `math` | `answerable_math` |
+| `mnli_train.csv` | `mnli` | `mnli_train` |
+
+**What this means:**
+- Output files are named: `mistral-7b-instruct-answers-movies.csv` (NOT `movie_qa_train`)
+- Probe files are named: `clf_mistral-7b-instruct_movies_layer-15_token-*.pkl`
+- The `availability_scanner.py` must use `output_id` from `DATASET_CONFIG`, not the dataset ID
+
+**Already fixed in**: `DATASET_CONFIG` (section 2.2) and `availability_scanner.py` (Appendix A)
+
+### 2. LLaMA Hidden Size
+
+LLaMA-3-8B models have `hidden_size=8192`, not 4096 like Mistral:
+
+```python
+# CORRECT values from probing_utils.py:
+"mistralai/Mistral-7B-Instruct-v0.2": 4096
+"meta-llama/Meta-Llama-3-8B": 8192  # NOT 4096!
+```
+
+**Already fixed in**: `SUPPORTED_MODELS` (section 2.2)
+
+### 3. Dataset Column Names Vary
+
+Different datasets have different column naming conventions:
+
+| Dataset | Question Column | Answer Column |
+|---------|-----------------|---------------|
+| movie_qa_* | `Question` (capital) | `Answer` |
+| AnswerableMath* | `question` (lowercase) | `answer` |
+| winobias_* | `sentence` | `answer` |
+
+**Already fixed in**: `DATASET_CONFIG` specifies `question_col` and `answer_col` per dataset
+
+### 4. Attention Extraction vs Layer Extraction
+
+Two different approaches exist in this codebase:
+
+| Purpose | Method | Used In |
+|---------|--------|---------|
+| Layer representations (for probing) | baukit's `TraceDict` | `probing_utils.py` |
+| Attention patterns (for visualization) | `output_attentions=True` | `attention_extractor.py` |
+
+**Why different?** `TraceDict` captures projected outputs; we need raw attention weights (pre-projection).
+
+**Already documented in**: `attention_extractor.py` docstring (Appendix C)
+
+### 5. Empty Checkpoints Directory
+
+Currently, `checkpoints/` is empty (no probes trained yet). This means:
+- All datasets will show "PARTIAL" or "NOT PROCESSED" status initially
+- Full visualization (with probe colors) requires running `./run_pipeline.sh`
+
+**Not a bug** - the UI handles this with graceful degradation.
+
+---
+
 ## 1. Architecture Overview
 
 ```
