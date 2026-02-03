@@ -85,6 +85,24 @@ Currently, `checkpoints/` is empty (no probes trained yet). This means:
 
 **Not a bug** - the UI handles this with graceful degradation.
 
+### 6. Use Logging Everywhere
+
+Every module should use the centralized logger (section 8.4). This enables:
+- Debugging issues in production without adding print statements
+- Tracing request flow through the system
+- Identifying performance bottlenecks
+
+```python
+# At the top of every backend module:
+from utils.logging import get_logger
+logger = get_logger("module_name")
+
+# Then use throughout:
+logger.info("Operation started")
+logger.debug("Detailed info for debugging")
+logger.error("Something failed", exc_info=True)
+```
+
 ---
 
 ## 1. Architecture Overview
@@ -183,7 +201,9 @@ visualization/
 │   │
 │   └── utils/
 │       ├── __init__.py
-│       └── correctness.py        # Wrapper for compute_correctness
+│       ├── logging.py            # Centralized logging setup (see section 8.4)
+│       ├── correctness.py        # Wrapper for compute_correctness
+│       └── exceptions.py         # Custom exception classes (see section 8.1)
 ```
 
 ### 2.2 Module Specifications
@@ -1770,6 +1790,182 @@ client.interceptors.response.use(
 );
 ```
 
+### 8.4 Logging Strategy
+
+Proper logging is critical for debugging issues in production. Use Python's `logging` module with structured logs.
+
+#### Logger Setup (`utils/logging.py`)
+
+```python
+"""
+Centralized logging configuration for visualization backend.
+"""
+import logging
+import sys
+from pathlib import Path
+from typing import Optional
+
+# Log format with timestamp, level, module, and message
+LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+def setup_logging(
+    level: str = "INFO",
+    log_file: Optional[Path] = None
+) -> logging.Logger:
+    """
+    Configure root logger for the visualization backend.
+    
+    Args:
+        level: Log level (DEBUG, INFO, WARNING, ERROR)
+        log_file: Optional file path for log output
+    """
+    # Create root logger for visualization
+    logger = logging.getLogger("visualization")
+    logger.setLevel(getattr(logging, level.upper()))
+    
+    # Console handler (always)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
+    logger.addHandler(console_handler)
+    
+    # File handler (optional)
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
+        logger.addHandler(file_handler)
+    
+    return logger
+
+def get_logger(module_name: str) -> logging.Logger:
+    """Get a child logger for a specific module."""
+    return logging.getLogger(f"visualization.{module_name}")
+```
+
+#### What to Log in Each Module
+
+| Module | Log Level | What to Log |
+|--------|-----------|-------------|
+| **app.py** | INFO | Request received, response sent, endpoint timing |
+| **app.py** | ERROR | Unhandled exceptions, validation failures |
+| **model_manager.py** | INFO | Model loading started, loaded successfully, unloaded |
+| **model_manager.py** | WARNING | Model already loaded (skipping), low memory |
+| **model_manager.py** | ERROR | CUDA OOM, model load failure |
+| **model_manager.py** | DEBUG | Device detection, memory stats |
+| **dataset_manager.py** | INFO | Dataset loaded, cache hit/miss |
+| **dataset_manager.py** | WARNING | Dataset file missing columns |
+| **dataset_manager.py** | ERROR | File not found, parse error |
+| **availability_scanner.py** | INFO | Scan started, found N combinations |
+| **availability_scanner.py** | DEBUG | Each file checked, probe found |
+| **layer_extractor.py** | INFO | Extraction started, completed |
+| **layer_extractor.py** | DEBUG | Layer-by-layer progress |
+| **attention_extractor.py** | INFO | Extraction started, completed |
+| **attention_extractor.py** | DEBUG | Memory usage per layer |
+| **probe_runner.py** | INFO | Probe loaded, prediction made |
+| **probe_runner.py** | WARNING | Probe not found for combination |
+| **session_manager.py** | INFO | Session created, session cleared |
+
+#### Example Usage in Modules
+
+```python
+# managers/model_manager.py
+from utils.logging import get_logger
+
+logger = get_logger("model_manager")
+
+class ModelManager:
+    def load_model(self, model_id: str) -> Dict[str, Any]:
+        if self.current_model_id == model_id:
+            logger.info(f"Model already loaded: {model_id}")
+            return {"status": "already_loaded", "model_id": model_id}
+        
+        logger.info(f"Loading model: {model_id}")
+        try:
+            # Unload previous if exists
+            if self.model is not None:
+                logger.info(f"Unloading previous model: {self.current_model_id}")
+                self.unload()
+            
+            # Load new model
+            logger.debug(f"Detected device: {self.device}")
+            self.model, self.tokenizer = load_model_and_validate_gpu(model_id)
+            self.current_model_id = model_id
+            
+            logger.info(f"Model loaded successfully: {model_id} on {self.device}")
+            return {"status": "loaded", "model_id": model_id, "device": self.device}
+            
+        except Exception as e:
+            logger.error(f"Failed to load model {model_id}: {e}", exc_info=True)
+            raise ModelLoadError(f"Failed to load {model_id}: {str(e)}")
+```
+
+```python
+# scanners/availability_scanner.py
+from utils.logging import get_logger
+
+logger = get_logger("availability_scanner")
+
+def get_available_combinations() -> List[Dict[str, Any]]:
+    logger.info("Starting availability scan...")
+    combinations = []
+    
+    for model_id, model_config in SUPPORTED_MODELS.items():
+        model_friendly = model_config["friendly_name"]
+        
+        for dataset_id, dataset_config in DATASET_CONFIG.items():
+            output_id = dataset_config["output_id"]
+            answers_file = OUTPUT_DIR / f"{model_friendly}-answers-{output_id}.csv"
+            
+            has_answers = answers_file.exists()
+            logger.debug(f"Checking {model_friendly}/{output_id}: answers={has_answers}")
+            
+            # ... rest of logic
+            
+    logger.info(f"Scan complete: found {len(combinations)} combinations")
+    return combinations
+```
+
+```python
+# app.py - Request logging middleware
+from utils.logging import get_logger
+import time
+
+logger = get_logger("api")
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    logger.info(f"→ {request.method} {request.url.path}")
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    logger.info(f"← {request.method} {request.url.path} [{response.status_code}] {duration:.2f}s")
+    
+    return response
+```
+
+#### Log Levels Guide
+
+| Level | When to Use |
+|-------|-------------|
+| **DEBUG** | Detailed info for debugging (disable in production) |
+| **INFO** | Normal operations: started, completed, loaded |
+| **WARNING** | Something unexpected but not fatal: cache miss, fallback used |
+| **ERROR** | Operation failed, requires attention |
+| **CRITICAL** | System cannot continue (rarely used) |
+
+#### Environment-Based Configuration
+
+```python
+# config.py
+import os
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")  # DEBUG in dev, INFO in prod
+LOG_FILE = os.getenv("LOG_FILE", None)       # Optional file output
+```
+
 ---
 
 ## 9. Caching Strategy
@@ -1862,12 +2058,14 @@ function useSession() {
 - [ ] Create `visualization/` directory structure
 - [ ] Backend: Create `requirements.txt` (fastapi, uvicorn, pydantic)
 - [ ] Backend: Create `config.py` with paths and constants
+- [ ] Backend: Create `utils/logging.py` (centralized logging - see section 8.4)
+- [ ] Backend: Create `utils/exceptions.py` (error classes - see section 8.1)
 - [ ] Frontend: Initialize React+Vite+TypeScript project
 - [ ] Frontend: Install dependencies (d3, zustand, axios, tailwind)
 - [ ] Create `run.py` to start both servers
 
 ### Phase 2: Backend Core (3 hours)
-- [ ] Implement `app.py` with FastAPI boilerplate + CORS
+- [ ] Implement `app.py` with FastAPI boilerplate + CORS + request logging middleware
 - [ ] Implement `schemas/requests.py` and `schemas/responses.py`
 - [ ] Implement `managers/model_manager.py`
   - [ ] `load_model()` with existing `probing_utils.py`
