@@ -53,11 +53,9 @@ else
 fi
 
 # Check output file was created
-OUTPUT_FILE="../output/${MODEL_FRIENDLY_NAMES[$MODEL]}-answers-${DATASET}.csv"
-if [ ! -f "$OUTPUT_FILE" ]; then
-    # Try with friendly name
-    OUTPUT_FILE="../output/mistral-7b-instruct-answers-${DATASET}.csv"
-fi
+# Convert model name to friendly name (e.g., "mistralai/Mistral-7B-Instruct-v0.2" -> "mistral-7b-instruct")
+MODEL_FRIENDLY=$(echo "$MODEL" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]' | sed 's/-v[0-9.]*$//')
+OUTPUT_FILE="../output/${MODEL_FRIENDLY}-answers-${DATASET}.csv"
 
 if [ -f "$OUTPUT_FILE" ]; then
     LINES=$(wc -l < "$OUTPUT_FILE")
