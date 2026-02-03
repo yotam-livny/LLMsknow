@@ -465,9 +465,14 @@ The tool offers **three complementary visualization modes**:
 │     └─ Once loaded, model indicator turns green ✓                          │
 │                                                                             │
 │  3. SELECT INPUT (Dataset Mode)                                             │
-│     ├─ User picks dataset from dropdown                                     │
-│     ├─ Sample table loads with paginated data                               │
-│     ├─ User can search/filter samples                                       │
+│     ├─ Dataset dropdown shows AVAILABILITY STATUS for selected model:       │
+│     │   • ✓ Ready: Has probe, full visualization available                  │
+│     │   • ⚠ Partial: Has answers but no probe                               │
+│     │   • ○ Not processed: Need to run pipeline first                       │
+│     ├─ User picks dataset (any status allowed)                              │
+│     ├─ If "Ready": Sample table loads with pre-computed samples             │
+│     ├─ If "Partial": Sample table loads, warning shown about no probe       │
+│     ├─ If "Not processed": Raw dataset samples shown, live inference only   │
 │     ├─ User clicks a row to select sample                                   │
 │     ├─ Selected input appears in "SELECTED INPUT" box                       │
 │     └─ Run button becomes ENABLED                                           │
@@ -912,7 +917,186 @@ User clicks different view mode radio button
 
 ## Data Structures
 
-### DatasetInfo (NEW - available datasets)
+### Available Combinations (NEW - model/dataset/probe availability)
+
+The backend scans `output/` and `checkpoints/` to determine which combinations are ready:
+
+```json
+{
+  "available_combinations": [
+    {
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+      "model_name": "Mistral-7B-Instruct",
+      "dataset_id": "movies",
+      "dataset_name": "Movie QA (Train)",
+      "has_answers": true,           // answers CSV exists
+      "has_input_output_ids": true,  // .pt file exists  
+      "has_probe": true,             // trained classifier exists
+      "probe_config": {
+        "layer": 15,
+        "token": "exact_answer_last_token"
+      },
+      
+      // Training coverage tracking
+      "samples_processed": 1000,     // how many samples were processed
+      "samples_total": 10001,        // total available in raw dataset
+      "samples_coverage": 0.10,      // 10% coverage
+      
+      "accuracy": 0.242,             // from training run
+      "ready_for_visualization": true,
+      "ready_for_probe_predictions": true
+    },
+    {
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+      "model_name": "Mistral-7B-Instruct",
+      "dataset_id": "math",
+      "dataset_name": "Answerable Math",
+      "has_answers": true,           // answers exist
+      "has_input_output_ids": true,
+      "has_probe": false,            // BUT no probe trained
+      "probe_config": null,
+      
+      "samples_processed": 500,      // partial processing
+      "samples_total": 1952,
+      "samples_coverage": 0.26,      // 26% coverage
+      
+      "accuracy": 0.315,
+      "ready_for_visualization": true,     // can view answers
+      "ready_for_probe_predictions": false // can't show probe colors
+    },
+    {
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.2",
+      "model_name": "Mistral-7B-Instruct",
+      "dataset_id": "mnli",
+      "dataset_name": "MNLI (Train)",
+      "has_answers": false,          // NOT YET RUN
+      "has_input_output_ids": false,
+      "has_probe": false,
+      "probe_config": null,
+      
+      "samples_processed": 0,
+      "samples_total": 5000,         // available to process
+      "samples_coverage": 0,
+      
+      "accuracy": null,
+      "ready_for_visualization": false,
+      "ready_for_probe_predictions": false
+    }
+  ]
+}
+```
+
+### UI Behavior Based on Availability
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  MODEL: [Mistral-7B-Instruct ▼]                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  INPUT SOURCE: [◉ From Dataset] [○ Custom Input]                            │
+│                                                                             │
+│  DATASET: [Select dataset ▼]                                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  Dataset           │ Processed      │ Probe │ Accuracy │ Status     │   │
+│  │───────────────────────────────────────────────────────────────────────   │
+│  │  ✓ Movie QA        │ 1,000 / 10,001 │  ✓    │  24.2%   │ READY      │   │
+│  │  ⚠ Answerable Math │   500 / 1,952  │  ✗    │  31.5%   │ NO PROBE   │   │
+│  │  ○ MNLI            │     — / 5,000  │  ✗    │    —     │ NOT RUN    │   │
+│  │  ○ Winogrande      │     — / 9,000  │  ✗    │    —     │ NOT RUN    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Legend:                                                                    │
+│  ✓ READY   = Has trained probe, full visualization available               │
+│  ⚠ NO PROBE = Has answers but no probe (can view, limited viz)             │
+│  ○ NOT RUN  = Not processed yet (raw dataset only)                         │
+│                                                                             │
+│  "1,000 / 10,001" = samples processed / total available                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Training Coverage Details (shown when dataset selected)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SELECTED: Movie QA (Train) with Mistral-7B-Instruct                        │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│                                                                             │
+│  📊 Training Coverage                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                      │   │
+│  │  Samples Processed:  1,000 / 10,001  (10.0%)                        │   │
+│  │  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │   │
+│  │                                                                      │   │
+│  │  Accuracy: 24.2%  (242 correct / 1,000 processed)                   │   │
+│  │                                                                      │   │
+│  │  Probe: ✓ Trained at Layer 15, Token: exact_answer_last_token       │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  💡 Tip: Only 10% of available data was used for training.                  │
+│     Run `./run_pipeline.sh 10000` to train on the full dataset.            │
+│                                                                             │
+│  ┌───────────────────────────────────┐                                      │
+│  │  [Browse 1,000 Processed Samples] │  ← explore samples with results     │
+│  │  [Browse Full Dataset (10,001)]   │  ← run live inference on any sample │
+│  └───────────────────────────────────┘                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Coverage Warning for Low Training Data
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ⚠️ LOW COVERAGE WARNING                                                    │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                             │
+│  Only 500 of 10,001 samples (5.0%) have been processed.                    │
+│                                                                             │
+│  The probe may have limited accuracy due to small training set.            │
+│                                                                             │
+│  To process more samples:                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  cd LLMsKnow && ./run_pipeline.sh 5000                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Estimated time: ~100 minutes for 5000 samples                             │
+│                                                                             │
+│                                    [Continue with Current Data] [Dismiss]  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Three Modes of Operation
+
+```
+MODE 1: FULL VISUALIZATION (has_probe = true)
+─────────────────────────────────────────────
+• Select from pre-processed samples
+• Show probe predictions at each layer (🔴→🟡→🟢)
+• Show correctness comparison with ground truth
+• Full insight panel with all statistics
+
+MODE 2: BASIC VISUALIZATION (has_answers = true, has_probe = false)  
+─────────────────────────────────────────────────────────────────────
+• Select from pre-processed samples
+• Show model outputs
+• Show correctness comparison with ground truth
+• ⚠️ Probe predictions DISABLED (grayed out)
+• Message: "Train probe for this model/dataset to enable predictions"
+
+MODE 3: LIVE INFERENCE (any model, any input)
+─────────────────────────────────────────────
+• Custom input OR unprocessed dataset
+• Runs model inference in real-time
+• Shows generated answer
+• ⚠️ No probe predictions (no trained classifier)
+• ⚠️ No pre-computed layer data (would need to extract on-the-fly)
+• Good for exploration, not for deep analysis
+```
+
+### DatasetInfo (available datasets)
 ```json
 {
   "datasets": [
@@ -1415,6 +1599,206 @@ visualization/
 ---
 
 ## New Code Required for Dataset Browser
+
+### `availability_scanner.py` (Backend - NEW)
+
+```python
+"""
+Scans output/ and checkpoints/ to determine which model/dataset combinations
+have trained probes and pre-computed data.
+"""
+import os
+import re
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import pandas as pd
+
+# Import from existing codebase
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+from probing_utils import MODEL_FRIENDLY_NAMES, LIST_OF_MODELS, LIST_OF_DATASETS
+
+OUTPUT_DIR = Path(__file__).parent.parent.parent / "output"
+CHECKPOINTS_DIR = Path(__file__).parent.parent.parent / "checkpoints"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+
+def get_available_combinations() -> List[Dict[str, Any]]:
+    """
+    Scan output/ and checkpoints/ to find all available model/dataset combinations.
+    Returns list of combinations with their availability status.
+    """
+    combinations = []
+    
+    for model_id in LIST_OF_MODELS:
+        model_friendly = MODEL_FRIENDLY_NAMES.get(model_id, model_id)
+        
+        for dataset_id in LIST_OF_DATASETS:
+            # Check for answers file
+            answers_file = OUTPUT_DIR / f"{model_friendly}-answers-{dataset_id}.csv"
+            has_answers = answers_file.exists()
+            
+            # Check for input_output_ids file
+            ids_file = OUTPUT_DIR / f"{model_friendly}-input_output_ids-{dataset_id}.pt"
+            has_ids = ids_file.exists()
+            
+            # Check for probe checkpoint (any layer/token combination)
+            probe_files = list(CHECKPOINTS_DIR.glob(f"clf_{model_friendly}_{dataset_id}_layer-*_token-*.pkl"))
+            has_probe = len(probe_files) > 0
+            
+            # Parse probe config from filename if exists
+            probe_config = None
+            if has_probe:
+                # Parse: clf_mistral-7b-instruct_movies_layer-15_token-exact_answer_last_token.pkl
+                match = re.search(r'layer-(\d+)_token-(.+)\.pkl', probe_files[0].name)
+                if match:
+                    probe_config = {
+                        "layer": int(match.group(1)),
+                        "token": match.group(2)
+                    }
+            
+            # Get sample count and accuracy if answers file exists
+            sample_count = 0
+            accuracy = None
+            if has_answers:
+                try:
+                    df = pd.read_csv(answers_file)
+                    sample_count = len(df)
+                    if 'automatic_correctness' in df.columns:
+                        accuracy = df['automatic_correctness'].mean()
+                except Exception:
+                    pass
+            
+            # Get total samples available in raw dataset
+            total_available = get_total_samples_in_dataset(dataset_id)
+            
+            combinations.append({
+                "model_id": model_id,
+                "model_name": model_friendly,
+                "dataset_id": dataset_id,
+                "dataset_name": get_dataset_display_name(dataset_id),
+                "has_answers": has_answers,
+                "has_input_output_ids": has_ids,
+                "has_probe": has_probe,
+                "probe_config": probe_config,
+                
+                # Training data tracking
+                "samples_processed": sample_count,           # How many were actually processed
+                "samples_total": total_available,            # Total available in raw dataset
+                "samples_coverage": round(sample_count / total_available, 2) if total_available > 0 else 0,
+                
+                "accuracy": round(accuracy, 3) if accuracy else None,
+                "ready_for_visualization": has_answers and has_ids,
+                "ready_for_probe_predictions": has_probe
+            })
+
+
+def get_total_samples_in_dataset(dataset_id: str) -> int:
+    """Get total number of samples available in raw dataset CSV."""
+    # Map dataset_id to actual CSV filename
+    dataset_files = {
+        "movies": "movie_qa_train.csv",
+        "movies_test": "movie_qa_test.csv",
+        "math": "AnswerableMath.csv",
+        "math_test": "AnswerableMath_test.csv",
+        "mnli": "mnli_train.csv",
+        "mnli_test": "mnli_validation.csv",
+        "winogrande": "winogrande_train.csv",
+        "winogrande_test": "winogrande_test.csv",
+        "winobias": "winobias_dev.csv",
+        "winobias_test": "winobias_test.csv",
+    }
+    
+    filename = dataset_files.get(dataset_id)
+    if not filename:
+        return 0
+    
+    filepath = DATA_DIR / filename
+    if not filepath.exists():
+        return 0
+    
+    try:
+        df = pd.read_csv(filepath)
+        return len(df)
+    except Exception:
+        return 0
+    
+    return combinations
+
+
+def get_available_combinations_for_model(model_id: str) -> List[Dict[str, Any]]:
+    """Get combinations filtered by model."""
+    all_combos = get_available_combinations()
+    return [c for c in all_combos if c["model_id"] == model_id]
+
+
+def get_ready_combinations() -> List[Dict[str, Any]]:
+    """Get only combinations that are ready for full visualization."""
+    all_combos = get_available_combinations()
+    return [c for c in all_combos if c["ready_for_probe_predictions"]]
+
+
+def get_dataset_display_name(dataset_id: str) -> str:
+    """Convert dataset_id to human-readable name."""
+    names = {
+        "movies": "Movie QA",
+        "triviaqa": "TriviaQA", 
+        "math": "Answerable Math",
+        "mnli": "MNLI",
+        "winogrande": "Winogrande",
+        "winobias": "WinoBias",
+        "imdb": "IMDB Sentiment",
+        "hotpotqa": "HotpotQA",
+        "hotpotqa_with_context": "HotpotQA (with context)",
+        "natural_questions_with_context": "Natural Questions"
+    }
+    return names.get(dataset_id, dataset_id.replace("_", " ").title())
+```
+
+### FastAPI Endpoints for Availability
+
+```python
+@app.get("/api/combinations")
+def list_combinations(model_id: str = None, ready_only: bool = False):
+    """
+    List available model/dataset combinations with their status.
+    
+    Query params:
+    - model_id: Filter by specific model
+    - ready_only: Only return combinations with trained probes
+    """
+    if ready_only:
+        combos = get_ready_combinations()
+    elif model_id:
+        combos = get_available_combinations_for_model(model_id)
+    else:
+        combos = get_available_combinations()
+    
+    return {"combinations": combos}
+
+
+@app.get("/api/models")
+def list_models():
+    """List available models with their ready dataset count."""
+    combos = get_available_combinations()
+    
+    models = {}
+    for c in combos:
+        if c["model_id"] not in models:
+            models[c["model_id"]] = {
+                "id": c["model_id"],
+                "name": c["model_name"],
+                "ready_datasets": 0,
+                "total_datasets": 0
+            }
+        models[c["model_id"]]["total_datasets"] += 1
+        if c["ready_for_probe_predictions"]:
+            models[c["model_id"]]["ready_datasets"] += 1
+    
+    return {"models": list(models.values())}
+```
+
+---
 
 ### `dataset_manager.py` (Backend)
 
