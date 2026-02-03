@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { AttentionView } from './AttentionView';
 import { AlternativesView } from './AlternativesView';
+import { CorrectnessEvolutionView } from './CorrectnessEvolutionView';
 
-type ViewTab = 'attention' | 'alternatives';
+type ViewTab = 'attention' | 'alternatives' | 'correctness';
 
 export function VisualizationPanel() {
   const [activeTab, setActiveTab] = useState<ViewTab>('attention');
@@ -14,6 +15,7 @@ export function VisualizationPanel() {
 
   const hasData = inferenceResult && attentionData;
   const hasAlternatives = inferenceResult?.token_alternatives && inferenceResult.token_alternatives.length > 0;
+  const hasLayerData = inferenceResult?.has_layer_data;
 
   return (
     <div className="visualization-panel">
@@ -36,6 +38,14 @@ export function VisualizationPanel() {
             >
               🎯 Alternatives
             </button>
+            <button 
+              className={activeTab === 'correctness' ? 'active' : ''}
+              onClick={() => setActiveTab('correctness')}
+              disabled={!hasLayerData}
+              title={hasLayerData ? 'View correctness evolution across layers' : 'Run inference with layer extraction'}
+            >
+              📈 Correctness
+            </button>
           </div>
         )}
       </div>
@@ -57,6 +67,7 @@ export function VisualizationPanel() {
           <>
             {activeTab === 'attention' && <AttentionView />}
             {activeTab === 'alternatives' && <AlternativesView />}
+            {activeTab === 'correctness' && <CorrectnessEvolutionView />}
           </>
         )}
       </div>

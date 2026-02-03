@@ -19,7 +19,9 @@ from api.schemas import (
     DatasetSamplesResponse, CombinationInfo, ModelSummary, HealthResponse,
     InferenceRequest, InferenceResponse, TokenInfo, LayerStats,
     LayerDataResponse, AttentionDataResponse, AttentionHeadStats,
-    ModelLoadRequest, ModelStatusResponse, ProbePrediction, ErrorResponse
+    ModelLoadRequest, ModelStatusResponse, ProbePrediction, ErrorResponse,
+    CorrectnessEvolutionRequest, CorrectnessEvolutionResponse,
+    ExactAnswerInfo, LayerProbeResult
 )
 from core.dataset_manager import (
     list_datasets, get_dataset_info, get_dataset_samples, get_sample_by_index
@@ -32,12 +34,15 @@ from core.model_manager import ModelManager
 from core.layer_extractor import LayerExtractor
 from core.attention_extractor import AttentionExtractor
 from core.probe_runner import ProbeRunner, get_probe_info
+from core.exact_answer_extractor import ExactAnswerExtractor
 
 # Global storage for current inference session
 _current_session = {
     "inference_result": None,
     "layer_data": None,
     "attention_data": None,
+    "dataset_id": None,
+    "correctness_evolution": None,
 }
 
 logger = get_logger("api")
@@ -319,7 +324,8 @@ async def run_inference(request: InferenceRequest):
             )
         
         # Try to run probe predictions if available
-        probe_predictions = None
+        probe_predictions = None  # At last input token
+        probe_predictions_output = None  # At last output token
         probe_available = False
         if request.dataset_id and layer_data:
             try:
@@ -329,21 +335,34 @@ async def run_inference(request: InferenceRequest):
                     runner = ProbeRunner(request.model_id, request.dataset_id)
                     probes = runner.list_available_probes()
                     
-                    # Use the last input token for predictions (common choice)
-                    token_idx = input_length - 1
-                    
-                    # Get predictions from all available probes
                     import numpy as np
+                    
+                    # Position 1: Last input token (before generation)
+                    input_token_idx = input_length - 1
                     probe_predictions = {}
                     for probe in probes:
                         try:
                             layer_idx = probe["layer"]
                             layer_rep = np.array(layer_data["layers"][layer_idx])
-                            token_rep = layer_rep[token_idx]
+                            token_rep = layer_rep[input_token_idx]
                             pred = runner.predict(token_rep, layer_idx, probe["token"])
                             probe_predictions[layer_idx] = ProbePrediction(**pred)
                         except Exception as e:
-                            logger.warning(f"Failed probe at layer {probe['layer']}: {e}")
+                            logger.warning(f"Failed probe at layer {probe['layer']} (input): {e}")
+                    
+                    # Position 2: Last output token (after full generation)
+                    output_token_idx = total_length - 1  # Last generated token
+                    probe_predictions_output = {}
+                    for probe in probes:
+                        try:
+                            layer_idx = probe["layer"]
+                            layer_rep = np.array(layer_data["layers"][layer_idx])
+                            if output_token_idx < len(layer_rep):
+                                token_rep = layer_rep[output_token_idx]
+                                pred = runner.predict(token_rep, layer_idx, probe["token"])
+                                probe_predictions_output[layer_idx] = ProbePrediction(**pred)
+                        except Exception as e:
+                            logger.warning(f"Failed probe at layer {probe['layer']} (output): {e}")
             except Exception as e:
                 logger.warning(f"Failed to run probes: {e}")
         
@@ -369,12 +388,14 @@ async def run_inference(request: InferenceRequest):
             token_alternatives=formatted_alternatives,
             actual_correct=actual_correct,
             probe_predictions=probe_predictions,
+            probe_predictions_output=probe_predictions_output,
             probe_available=probe_available,
             has_layer_data=(layer_data is not None),
             has_attention_data=(attention_data is not None)
         )
         
         _current_session["inference_result"] = response
+        _current_session["dataset_id"] = request.dataset_id
         
         logger.info(f"Inference complete: {output_length} tokens generated")
         return response
@@ -414,6 +435,212 @@ async def get_probes(model_id: str, dataset_id: str):
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
     
     return get_probe_info(model_id, dataset_id)
+
+
+# Correctness Evolution endpoint
+@app.post("/api/inference/correctness-evolution", response_model=CorrectnessEvolutionResponse, tags=["Inference"])
+async def get_correctness_evolution(request: CorrectnessEvolutionRequest):
+    """
+    Analyze how the model's correctness "belief" evolves across layers.
+    
+    This endpoint:
+    1. Extracts "exact answer" tokens from the generated response
+    2. Runs probes at all available layers for those token positions
+    3. Returns the evolution of correctness confidence
+    
+    Based on: "LLMs Know More Than They Show" - truthfulness information
+    is concentrated in exact answer tokens.
+    """
+    global _current_session
+    
+    logger.info("Computing correctness evolution")
+    
+    # Get inference result from session or require new inference
+    inference_result = _current_session.get("inference_result")
+    layer_data = _current_session.get("layer_data")
+    
+    if not inference_result or not layer_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No inference data available. Run /api/inference first with extract_layers=true."
+        )
+    
+    mm = ModelManager()
+    if not mm._current_model_id:
+        raise HTTPException(status_code=400, detail="No model loaded")
+    
+    try:
+        # Extract exact answer tokens
+        extractor = ExactAnswerExtractor(mm)
+        exact_result = extractor.extract_exact_answer(
+            question=inference_result.question,
+            model_answer=inference_result.generated_answer,
+            expected_answer=inference_result.expected_answer,
+            is_correct=inference_result.actual_correct
+        )
+        
+        logger.info(f"Extracted exact answer: {exact_result}")
+        
+        # Find token positions in the output
+        token_positions = []
+        if exact_result["valid"] and exact_result["exact_answer"] != "NO ANSWER":
+            token_positions = extractor.get_exact_answer_token_indices_in_output(
+                tokens=[t.model_dump() for t in inference_result.tokens],
+                exact_answer=exact_result["exact_answer"],
+                generated_answer=inference_result.generated_answer
+            )
+        
+        exact_answer_info = ExactAnswerInfo(
+            exact_answer=exact_result.get("exact_answer"),
+            start_char=exact_result.get("start_char", -1),
+            end_char=exact_result.get("end_char", -1),
+            extraction_method=exact_result.get("extraction_method", "unknown"),
+            valid=exact_result.get("valid", False),
+            token_positions=token_positions
+        )
+        
+        # Run probes at all available layers
+        layer_predictions = []
+        
+        # Determine which token position to measure at
+        # Priority: 1) User-specified, 2) Last exact answer token, 3) Last input token
+        if request.token_position is not None:
+            target_token_idx = request.token_position
+        elif token_positions:
+            target_token_idx = token_positions[-1]  # Last exact answer token
+        else:
+            target_token_idx = inference_result.input_token_count - 1  # Last input token
+        
+        # Get the token text at this position
+        measured_token_text = ""
+        if target_token_idx < len(inference_result.tokens):
+            measured_token_text = inference_result.tokens[target_token_idx].text
+        
+        logger.info(f"Measuring correctness at token position {target_token_idx}: '{measured_token_text}'")
+        
+        if inference_result.probe_available:
+            dataset_id = getattr(inference_result, 'dataset_id', None)
+            if not dataset_id:
+                # Try to infer from session
+                dataset_id = _current_session.get("dataset_id", "movie_qa_train")
+            
+            try:
+                runner = ProbeRunner(mm._current_model_id, dataset_id)
+                available_probes = runner.list_available_probes()
+                
+                # Collect available layers
+                import numpy as np
+                layers_data = layer_data.get("layers", {})
+                
+                for probe in available_probes:
+                    layer_idx = probe["layer"]
+                    token_type = probe["token"]
+                    
+                    if layer_idx not in layers_data:
+                        continue
+                    
+                    layer_rep = np.array(layers_data[layer_idx])
+                    if target_token_idx < len(layer_rep):
+                        token_rep = layer_rep[target_token_idx]
+                        
+                        try:
+                            pred = runner.predict(token_rep, layer_idx, token_type)
+                            layer_predictions.append(LayerProbeResult(
+                                layer=layer_idx,
+                                prediction=pred["prediction"],
+                                confidence=pred["confidence"],
+                                prob_correct=pred["probabilities"][0],
+                                prob_incorrect=pred["probabilities"][1]
+                            ))
+                        except Exception as e:
+                            logger.warning(f"Probe prediction failed at layer {layer_idx}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to run probes: {e}")
+        
+        # Sort by layer
+        layer_predictions.sort(key=lambda x: x.layer)
+        
+        # Compute summary statistics
+        first_confident_layer = None
+        peak_confidence_layer = -1
+        peak_confidence = 0.0
+        
+        for pred in layer_predictions:
+            confidence = pred.prob_correct if pred.prediction == 0 else pred.prob_incorrect
+            if first_confident_layer is None and confidence > 0.7:
+                first_confident_layer = pred.layer
+            if confidence > peak_confidence:
+                peak_confidence = confidence
+                peak_confidence_layer = pred.layer
+        
+        # Generate interpretation
+        interpretation = _generate_interpretation(
+            exact_result, layer_predictions, 
+            inference_result.actual_correct,
+            first_confident_layer
+        )
+        
+        return CorrectnessEvolutionResponse(
+            question=inference_result.question,
+            generated_answer=inference_result.generated_answer,
+            expected_answer=inference_result.expected_answer,
+            actual_correct=inference_result.actual_correct,
+            exact_answer=exact_answer_info,
+            measured_token_position=target_token_idx,
+            measured_token_text=measured_token_text,
+            layer_predictions=layer_predictions,
+            first_confident_layer=first_confident_layer,
+            peak_confidence_layer=peak_confidence_layer,
+            peak_confidence=peak_confidence,
+            interpretation=interpretation
+        )
+        
+    except Exception as e:
+        logger.error(f"Correctness evolution failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Correctness evolution failed: {str(e)}")
+
+
+def _generate_interpretation(
+    exact_result: dict,
+    layer_predictions: list,
+    actual_correct: bool,
+    first_confident_layer: int
+) -> str:
+    """Generate a human-readable interpretation of the correctness evolution."""
+    
+    if not exact_result.get("valid"):
+        return "Could not extract exact answer tokens from the response."
+    
+    if exact_result.get("exact_answer") == "NO ANSWER":
+        return "Model did not provide a clear answer to the question."
+    
+    if not layer_predictions:
+        return "No probe predictions available. Train probes at multiple layers for detailed analysis."
+    
+    # Single layer only
+    if len(layer_predictions) == 1:
+        pred = layer_predictions[0]
+        prob_correct = pred.prob_correct * 100
+        if pred.prediction == 0:  # Thinks correct
+            if actual_correct:
+                return f"Model's internal representation at layer {pred.layer} indicates it believes the answer is correct ({prob_correct:.1f}% confidence), which matches reality."
+            else:
+                return f"⚠️ Model's internal representation at layer {pred.layer} indicates it believes the answer is correct ({prob_correct:.1f}% confidence), but the answer is actually incorrect. This suggests miscalibration."
+        else:  # Thinks incorrect
+            if actual_correct:
+                return f"⚠️ Model's internal representation at layer {pred.layer} indicates uncertainty ({100-prob_correct:.1f}% thinks incorrect), but the answer is actually correct."
+            else:
+                return f"Model's internal representation at layer {pred.layer} encodes that the answer is likely incorrect ({100-prob_correct:.1f}% confidence), which matches reality."
+    
+    # Multiple layers - show evolution
+    early_layers = [p for p in layer_predictions if p.layer < 16]
+    late_layers = [p for p in layer_predictions if p.layer >= 16]
+    
+    if first_confident_layer is not None:
+        return f"Model develops confidence around layer {first_confident_layer}. " \
+               f"This suggests the 'correctness signal' emerges in {'early' if first_confident_layer < 16 else 'mid-to-late'} layers."
+    
+    return "Model shows varying confidence across layers. See the visualization for detailed evolution."
 
 
 # Main entry point

@@ -12,6 +12,14 @@ interface TokenAlternative {
   probability: number;
 }
 
+interface ProbePrediction {
+  layer: number;
+  token: string;
+  prediction: number;
+  confidence: number;
+  probabilities: number[];
+}
+
 interface InferenceResponse {
   model_id: string;
   question: string;
@@ -23,7 +31,8 @@ interface InferenceResponse {
   total_token_count: number;
   token_alternatives: TokenAlternative[][] | null;
   actual_correct: boolean | null;
-  probe_predictions: Record<number, { layer: number; token: string; prediction: number; confidence: number; probabilities: number[] }> | null;
+  probe_predictions: Record<number, ProbePrediction> | null;  // At last INPUT token
+  probe_predictions_output: Record<number, ProbePrediction> | null;  // At last OUTPUT token
   probe_available: boolean;
   has_layer_data: boolean;
   has_attention_data: boolean;

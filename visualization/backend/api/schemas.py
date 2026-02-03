@@ -151,7 +151,8 @@ class InferenceResponse(BaseModel):
     actual_correct: Optional[bool] = None  # Objective correctness if expected_answer provided
     
     # Probe predictions (if available)
-    probe_predictions: Optional[Dict[int, ProbePrediction]] = None
+    probe_predictions: Optional[Dict[int, ProbePrediction]] = None  # At last INPUT token
+    probe_predictions_output: Optional[Dict[int, ProbePrediction]] = None  # At last OUTPUT token
     probe_available: bool = False
     
     # Extraction flags
@@ -196,6 +197,66 @@ class ModelStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
+
+
+# Correctness Evolution schemas
+class ExactAnswerInfo(BaseModel):
+    """Information about extracted exact answer tokens."""
+    exact_answer: Optional[str] = None
+    start_char: int = -1
+    end_char: int = -1
+    extraction_method: str  # "direct" | "llm"
+    valid: bool = False
+    token_positions: List[int] = []  # Positions in the output sequence
+
+
+class LayerProbeResult(BaseModel):
+    """Probe prediction at a specific layer."""
+    layer: int
+    prediction: int  # 0 = correct, 1 = incorrect
+    confidence: float  # Confidence in the prediction
+    prob_correct: float  # P(correct)
+    prob_incorrect: float  # P(incorrect)
+
+
+class CorrectnessEvolutionResponse(BaseModel):
+    """
+    Response containing correctness evolution across layers.
+    Shows how the model's internal "belief" about correctness evolves.
+    """
+    # Basic info
+    question: str
+    generated_answer: str
+    expected_answer: Optional[str] = None
+    actual_correct: Optional[bool] = None
+    
+    # Exact answer extraction
+    exact_answer: ExactAnswerInfo
+    
+    # Token position used for measurement
+    measured_token_position: int = -1
+    measured_token_text: str = ""
+    
+    # Layer-by-layer probe predictions at the measured token
+    layer_predictions: List[LayerProbeResult]
+    
+    # Summary statistics
+    first_confident_layer: Optional[int] = None  # First layer with >70% confidence
+    peak_confidence_layer: int = -1
+    peak_confidence: float = 0.0
+    
+    # Interpretation
+    interpretation: str = ""
+
+
+class CorrectnessEvolutionRequest(BaseModel):
+    """Request for correctness evolution analysis."""
+    # Can use existing inference result or provide new question
+    use_current_session: bool = True
+    question: Optional[str] = None
+    expected_answer: Optional[str] = None
+    # Optional: specify token position to measure at (default: last exact answer token)
+    token_position: Optional[int] = None
 
 
 # Error response
